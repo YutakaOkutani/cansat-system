@@ -634,6 +634,49 @@ sudo systemctl disable --now cansat.timer
 
 `cansat.timer`を無効化しても、`cansat.service`と`discord-ip.service`は手動で起動できる。Discordの自動起動設定にも影響しない。
 
+#### 大会後の再調整時に自動起動をオフにする
+
+このリポジトリを次の大会でも使う場合は、大会終了後、再調整を始める前にRaspberry Pi上で次を実行する。再起動後もミッションが自動起動しない状態にする。
+
+```bash
+# 先に遅延起動の予約を解除し、次回以降の自動起動も無効化
+sudo systemctl disable --now cansat.timer
+
+# 実行中のミッションを停止し、過去にserviceを直接enableした設定も解除
+sudo systemctl disable --now cansat.service
+```
+
+`stop`だけでは次回起動時の自動起動設定が残る。`disable --now`は自動起動の無効化と現在の停止を行う。また、timerを止めるだけでは、すでに起動したミッションは停止しないため、上の2つを順番に実行する。
+
+停止・無効化できたことを確認する。
+
+```bash
+systemctl is-enabled cansat.timer cansat.service
+systemctl is-active cansat.timer cansat.service
+```
+
+`is-enabled`が両方とも`disabled`、`is-active`が両方とも`inactive`なら完了。これらの確認コマンドは、無効・停止状態では終了コードが0以外になるが正常である。再起動後も同じコマンドで確認できる。
+
+DiscordのIP通知は独立しているため、再調整中も残せる。通知もオフにする場合のみ、次を実行する。
+
+```bash
+sudo systemctl disable --now discord-ip.service
+```
+
+unitファイルを削除する必要はない。無効化中も`sudo systemctl start cansat.service`で手動起動できるため、再調整時は必要なタイミングで実行する。
+
+次の大会に向けて自動起動を戻す場合は、設定と動作の確認後に次を実行する。
+
+```bash
+# 次回のOS起動から5分遅延の自動起動を再開
+sudo systemctl enable cansat.timer
+
+# Discord通知も無効化していた場合のみ再有効化
+sudo systemctl enable discord-ip.service
+```
+
+ここでは`--now`を付けないため、その場では起動しない。`cansat.service`を直接enableする必要はない。
+
 #### 5. 状態とログを確認する
 
 ```bash
