@@ -188,7 +188,7 @@ class ControllerExceptionSafetyTest(unittest.TestCase):
             "p5_camera_stale_to_p7_give_up",
         )
 
-    def test_phase5_fresh_camera_timeout_preserves_existing_final_ram_transition(self):
+    def test_phase5_fresh_image_without_cone_never_forces_final_ram(self):
         harness = _TimeoutHarness()
         harness.last_phase_observed = Phase.PHASE5
         harness.st = types.SimpleNamespace(
@@ -204,8 +204,25 @@ class ControllerExceptionSafetyTest(unittest.TestCase):
             handled = harness._handle_timeout_transitions(Phase.PHASE5)
 
         self.assertTrue(handled)
-        self.assertEqual(harness.terminal_phase, Phase.PHASE6)
-        self.assertEqual(harness.mission_end_reason, "PHASE5_CUM_TIMEOUT_TO_PHASE6")
+        self.assertEqual(harness.terminal_phase, Phase.PHASE7)
+        self.assertEqual(harness.mission_end_reason, "PHASE5_VISUAL_LOST_TIMEOUT")
+
+    def test_visible_cone_overrides_phase_budgets_but_not_global_deadline(self):
+        for phase in (Phase.PHASE4, Phase.PHASE5):
+            for now, should_end in ((100.0, False), (1000.0, True)):
+                with self.subTest(phase=phase, now=now):
+                    harness = _TimeoutHarness()
+                    harness.last_phase_observed = phase
+                    harness.st = types.SimpleNamespace(snapshot=lambda: {
+                        "cone_valid": True, "cone_sequence": 12,
+                        "cone_updated_at": now - 0.2,
+                        "cone_probability": 0.5, "cone_direction": 0.85,
+                    })
+                    time_module = CanSatController._handle_timeout_transitions.__globals__["time"]
+                    with patch.object(time_module, "time", return_value=now):
+                        handled = harness._handle_timeout_transitions(phase)
+                    self.assertEqual(handled, should_end)
+                    self.assertEqual(harness.terminal_phase, Phase.PHASE7 if should_end else None)
 
     def test_shutdown_stops_workers_and_releases_hardware_before_final_log(self):
         harness = _ShutdownHarness()

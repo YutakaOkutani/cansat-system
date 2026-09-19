@@ -5,6 +5,9 @@ from mission.const import (
     APPROACH_TURN_GAIN,
     BASE_SPEED,
     CAMERA_FRAME_STALE_STOP_SEC,
+    CAMERA_EDGE_TURN_ERROR,
+    CAMERA_EDGE_TURN_RELEASE_ERROR,
+    CAMERA_EDGE_TURN_SPEED,
     CONE_CENTER_POSITION,
     CAMERA_TINY_MIN_CONSISTENT_FRAMES,
     CAMERA_TINY_OCCUPANCY_THRESHOLD,
@@ -503,6 +506,7 @@ class MotorManager:
         return nav_heading, heading_source, diff
 
     def _reset_phase45_camera_track(self):
+        self.phase45_edge_turn_side = None
         self.phase45_filtered_cone_dir = None
         self.phase45_filtered_cone_seq = None
         self.phase45_last_seen_time = None
@@ -563,6 +567,24 @@ class MotorManager:
         )
         return True
 
+    def _drive_camera_edge_turn(self, error, command_prefix, ramp_time):
+        """Recover image margin when a powered-inner-wheel arc is saturated."""
+        side = "right" if error > 0 else "left"
+        threshold = (
+            CAMERA_EDGE_TURN_RELEASE_ERROR
+            if getattr(self, "phase45_edge_turn_side", None) == side
+            else CAMERA_EDGE_TURN_ERROR
+        )
+        if abs(error) < threshold:
+            self.phase45_edge_turn_side = None
+            return False
+        self.phase45_edge_turn_side = side
+        self._set_forward_pivot_turn(
+            side, CAMERA_EDGE_TURN_SPEED, speed_inner=0.0,
+            ramp_time=ramp_time, cmd_type=f"{command_prefix}_edge_{side}",
+        )
+        return True
+
     def _drive_phase4_candidate_capture(self, command_prefix="phase4_candidate_capture"):
         """Move forward while proportionally steering a candidate to center."""
         last_dir = getattr(self, "phase4_last_candidate_dir", None)
@@ -570,6 +592,8 @@ class MotorManager:
             error = float(last_dir) - CONE_CENTER_POSITION
         except (TypeError, ValueError):
             return False
+        if self._drive_camera_edge_turn(error, command_prefix, PHASE4_MOTOR_RAMP_TIME):
+            return True
         if abs(error) <= float(PHASE4_ALIGN_STOP_DEADBAND):
             self.set_motors(
                 PHASE4_CANDIDATE_INNER_SPEED,
@@ -852,6 +876,18 @@ class MotorManager:
             return
         self._phase4_new_snapshot_candidate(snapshot, now)
         state = getattr(self, "phase4_search_state", "drive")
+        candidate = self._phase4_motor_candidate(snapshot)
+        if (
+            candidate is not None
+            and (not candidate["tiny"] or state == "track")
+            and int(getattr(self, "phase4_motor_missed_frames", 0)) == 0
+        ):
+            # Fresh visual evidence owns the target even after capture timers
+            # expire. Do not replace a visible cone with the search direction.
+            self.phase4_last_candidate_dir = candidate["direction"]
+            prefix = "phase4_candidate_observe" if state == "observe" else "phase4_candidate_capture"
+            self._drive_phase4_candidate_capture(prefix)
+            return
         capture_until = float(
             getattr(self, "phase4_candidate_active_until", now) or now
         )
@@ -910,7 +946,7 @@ class MotorManager:
             CONE_PROBABILITY_THRESHOLD_PHASE5,
         )
         cone_direction = snapshot.get("cone_direction", CONE_CENTER_POSITION)
-        filtered_direction = self._update_phase45_filtered_cone_dir(
+        self._update_phase45_filtered_cone_dir(
             cone_direction,
             cone_seen,
             cone_sequence=snapshot.get("cone_sequence"),
@@ -919,18 +955,12 @@ class MotorManager:
         if not cone_seen:
             self._drive_phase5_reacquire(now)
             return
-        steer_direction = (
-            filtered_direction
-            if filtered_direction is not None
-            else CONE_CENTER_POSITION
-        )
-        if close_reached:
-            # Final alignment must follow the latest image, not a lagging EMA
-            # that can still point to the opposite side of the cone.
-            steer_direction = self._snapshot_float(
-                snapshot, "cone_direction", CONE_CENTER_POSITION
-            )
+        # Steering follows the current image; the filtered history is retained
+        # only to recover from a brief missed detection.
+        steer_direction = self._snapshot_float(snapshot, "cone_direction", CONE_CENTER_POSITION)
         error = steer_direction - CONE_CENTER_POSITION
+        if self._drive_camera_edge_turn(error, "phase5_approach", PHASE5_MOTOR_RAMP_TIME):
+            return
         approach_speed = self._phase5_approach_speed(snapshot)
         if abs(error) <= float(PHASE5_STEER_DEADBAND):
             self.set_motors(

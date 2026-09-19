@@ -26,7 +26,7 @@ from mission.const import (
     PHASE5_RAM_CENTER_TOLERANCE,
     TIMEOUT_PHASE_5,
 )
-from mission.cone_candidate import cone_centered_for_final_ram, evaluate_cone_candidate
+from mission.cone_candidate import camera_has_visible_cone, cone_centered_for_final_ram, evaluate_cone_candidate
 from mission.nav import calc_distance_and_azimuth
 from mission.phases.base import BasePhaseHandler
 
@@ -102,6 +102,7 @@ class Phase5Handler(BasePhaseHandler):
                 led_green.on()
 
         current_snapshot = controller.st.snapshot()
+        visible_cone = camera_has_visible_cone(current_snapshot, time.time())
         if (
             hasattr(controller, "target_lat")
             and hasattr(controller, "target_lng")
@@ -114,7 +115,11 @@ class Phase5Handler(BasePhaseHandler):
                 controller.target_lng,
             )
             controller.st.update_navigation(distance=dist_m, azimuth=azimuth)
-            if dist_m > GPS_PHASE45_MAX_DISTANCE and not getattr(controller, "phase3_arrived_latched", False):
+            if (
+                dist_m > GPS_PHASE45_MAX_DISTANCE
+                and not getattr(controller, "phase3_arrived_latched", False)
+                and not visible_cone
+            ):
                 self._fallback_to_p3(
                     controller,
                     current_snapshot,
@@ -147,7 +152,7 @@ class Phase5Handler(BasePhaseHandler):
             controller.camera_dead_since is not None
             and now - controller.camera_dead_since >= CAMERA_DEAD_TIMEOUT
         )
-        if camera_dead and (
+        if camera_dead and not visible_cone and (
             controller.camera_phase5_attempts >= CAMERA_PHASE5_MAX_ATTEMPTS
             or (controller.camera_phase5_start is not None and now - controller.camera_phase5_start >= timeout_limit)
         ):
@@ -205,13 +210,11 @@ class Phase5Handler(BasePhaseHandler):
             controller.phase5_reach_confirm_count = 0
             controller.cone_phase_confirm_count = 0
 
-        if now - controller.time_camera_start >= timeout_limit:
-            controller.cone_phase_decision = "p5_timeout_to_p6"
-            elapsed = now - controller.time_camera_start
-            print(f"Phase5 TIMEOUT ({elapsed:.1f}s / {timeout_limit:.1f}s): Giving up, forcing Goal")
-            controller.mission_end_reason = "PHASE5_TIMEOUT_FORCED_GOAL"
-            controller.st.update_navigation(phase=int(Phase.PHASE6))
+        if now - controller.time_camera_start >= timeout_limit and not visible_cone:
+            controller.cone_phase_decision = "p5_timeout_to_p7_give_up"
+            controller.transition_to_give_up("PHASE5_VISUAL_LOST_TIMEOUT")
             return
+
 
 
 def run_standalone():

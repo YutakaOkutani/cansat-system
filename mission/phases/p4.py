@@ -33,7 +33,7 @@ from mission.const import (
     Phase,
     TIMEOUT_PHASE_4,
 )
-from mission.cone_candidate import evaluate_cone_candidate
+from mission.cone_candidate import camera_has_visible_cone, evaluate_cone_candidate
 from mission.nav import calc_distance_and_azimuth
 from mission.phases.base import BasePhaseHandler
 
@@ -272,6 +272,7 @@ class Phase4Handler(BasePhaseHandler):
             if recovery_started is None or float(recovery_started) < float(entry_marker):
                 controller.reset_camera_recovery_window()
         current_snapshot = controller.st.snapshot()
+        visible_cone = camera_has_visible_cone(current_snapshot, time.time())
         cone_prob = current_snapshot["cone_probability"]
         cone_dir = current_snapshot.get("cone_direction", CONE_CENTER_POSITION)
         evidence = evaluate_cone_candidate(current_snapshot)
@@ -310,7 +311,11 @@ class Phase4Handler(BasePhaseHandler):
                 controller.target_lng,
             )
             controller.st.update_navigation(distance=dist_m, azimuth=azimuth)
-            if dist_m > GPS_PHASE45_MAX_DISTANCE and not getattr(controller, "phase3_arrived_latched", False):
+            if (
+                dist_m > GPS_PHASE45_MAX_DISTANCE
+                and not getattr(controller, "phase3_arrived_latched", False)
+                and not visible_cone
+            ):
                 self._fallback_to_p3(
                     controller,
                     current_snapshot,
@@ -323,13 +328,13 @@ class Phase4Handler(BasePhaseHandler):
             controller.camera_phase4_attempts += 1
             controller.camera_phase4_start = controller.time_start_searching_cone
         else:
-            if now - controller.time_start_searching_cone >= TIMEOUT_PHASE_4:
+            if now - controller.time_start_searching_cone >= TIMEOUT_PHASE_4 and not visible_cone:
                 print("Phase4 TIMEOUT: stopping camera phases and giving up")
                 controller.cone_phase_decision = "p4_timeout_to_p7_give_up"
                 controller.searching_flag = False
                 controller.transition_to_give_up("PHASE4_TIMEOUT_GIVE_UP")
                 return
-        if bool(getattr(controller, "camera_recovery_exhausted", False)):
+        if bool(getattr(controller, "camera_recovery_exhausted", False)) and not visible_cone:
             attempts = int(getattr(controller, "camera_reinit_attempt_count", 0))
             print(f"Camera DEAD after {attempts} reinit attempts: giving up")
             controller.cone_phase_decision = "p4_camera_dead_to_p7_give_up"
@@ -378,9 +383,9 @@ class Phase4Handler(BasePhaseHandler):
         except (TypeError, ValueError):
             cone_dir_val = CONE_CENTER_POSITION
         centered = abs(cone_dir_val - CONE_CENTER_POSITION) <= CONE_PHASE4_CENTER_TOLERANCE
-        strict_detect = bool(centered and evidence["strict"])
+        strict_detect = bool(evidence["strict"])
         loose_detect = cone_prob > CONE_PROBABILITY_THRESHOLD
-        weak_detect = bool(centered and evidence["weak"])
+        weak_detect = bool(evidence["weak"])
         signature = self._candidate_signature(current_snapshot, cone_dir_val)
         candidate_detect = bool(cone_reached_effective or strict_detect or weak_detect)
         consistent, consistency_reason = self._candidate_consistency(

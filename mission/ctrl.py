@@ -39,6 +39,7 @@ from mission.const import (
     ROI_PATH_2,
     Phase,
 )
+from mission.cone_candidate import camera_has_visible_cone
 from mission.mgr import HardwareManager, LedManager, MotorManager, RadioManager, SensorManager
 from mission.phases import (
     Phase0Handler,
@@ -304,6 +305,8 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
             return "PHASE4_CAMERA_DEAD_GIVE_UP"
         if reason == "PHASE5_CAMERA_STALE_GIVE_UP":
             return "PHASE5_CAMERA_STALE_GIVE_UP"
+        if reason == "PHASE5_VISUAL_LOST_TIMEOUT":
+            return "PHASE5_VISUAL_LOST_TIMEOUT"
         return "OTHER_ABNORMAL_EXIT"
 
     def _write_final_log_row(self):
@@ -407,6 +410,11 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
         if phase_elapsed < phase_budget:
             return False
 
+        if current_phase in (Phase.PHASE4, Phase.PHASE5):
+            if camera_has_visible_cone(self.st.snapshot(), now):
+                # A live target remains authoritative until the global deadline.
+                return False
+
         # 個別フェーズの累積超過は、定数で定義された遷移先へ強制遷移する。
         next_phase = MISSION_PHASE_TIMEOUT_TRANSITIONS.get(current_phase, Phase.PHASE6)
         if current_phase == Phase.PHASE2:
@@ -426,7 +434,7 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
                         f"(unverified candidate={fallback_offset:.1f} deg)"
                     )
         phase5_camera_stale = False
-        if current_phase == Phase.PHASE5 and next_phase == Phase.PHASE6:
+        if current_phase == Phase.PHASE5:
             camera_snapshot = self.st.snapshot()
             try:
                 updated_at = float(camera_snapshot.get("cone_updated_at", 0.0))
@@ -455,6 +463,10 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
         if phase5_camera_stale:
             self.cone_phase_decision = "p5_camera_stale_to_p7_give_up"
             self.transition_to_give_up("PHASE5_CAMERA_STALE_GIVE_UP")
+            return True
+        if current_phase == Phase.PHASE5:
+            self.cone_phase_decision = "p5_visual_lost_timeout_to_p7_give_up"
+            self.transition_to_give_up("PHASE5_VISUAL_LOST_TIMEOUT")
             return True
         if next_phase == Phase.PHASE6 and self.mission_end_reason == "RUNNING":
             self.mission_end_reason = f"{current_phase.name}_CUM_TIMEOUT_TO_PHASE6"

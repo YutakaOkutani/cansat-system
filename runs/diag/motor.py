@@ -10,6 +10,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from mission.const import (
+    CAMERA_EDGE_TURN_SPEED,
     GRASS_MIN_MOTOR_SPEED,
     MANUAL_TURN_SPEED_RATIO,
     MOTOR_LEFT_MTR_INDEX,
@@ -319,7 +320,7 @@ PHASE_DRIVE_PROFILES = {
     "5": (
         _profile(
             "approach",
-            "P5 production cone-approach forward and maximum steering outputs.",
+            "P5 cone-approach forward and differential arc; use edge_recovery for a cone at the image edge.",
             _wasd_commands(
                 PHASE5_BASE_SPEED,
                 _phase5_outer,
@@ -371,6 +372,18 @@ PHASE_DRIVE_PROFILES = {
         ),
     ),
 }
+
+for _phase, _speed, _ramp in (
+    ("4", PHASE4_ALIGN_FORWARD_SPEED, PHASE4_MOTOR_RAMP_TIME),
+    ("5", PHASE5_BASE_SPEED, PHASE5_MOTOR_RAMP_TIME),
+):
+    PHASE_DRIVE_PROFILES[_phase] += (
+        _profile(
+            "edge_recovery",
+            "Image-edge recovery: outer wheel full duty, inner wheel stopped; W/S are diagnostic straight commands.",
+            _wasd_commands(_speed, CAMERA_EDGE_TURN_SPEED, 0.0, _ramp),
+        ),
+    )
 
 def setup():
     """Initialize gpiozero devices."""

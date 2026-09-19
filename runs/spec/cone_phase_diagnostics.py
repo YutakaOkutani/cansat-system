@@ -82,6 +82,33 @@ class _VisionController:
 
 
 class ConePhaseDiagnosticsTest(unittest.TestCase):
+    def test_visible_cone_survives_local_timeout_and_gps_disagreement(self):
+        for phase, handler, module in (
+            (Phase.PHASE4, Phase4Handler(), "mission.phases.p4"),
+            (Phase.PHASE5, Phase5Handler(), "mission.phases.p5"),
+        ):
+            with self.subTest(phase=phase):
+                ctrl = _VisionController(phase)
+                ctrl.time_camera_start = 1.0
+                ctrl.time_start_searching_cone = 1.0
+                ctrl.target_lat, ctrl.target_lng = 35.0, 139.0
+                ctrl.st.update_gps(lat=36.0, lng=140.0, gps_detect=1)
+                ctrl.update_cone_frame(direction=0.95, probability=0.5)
+                with patch(module + ".time.time", return_value=100.0):
+                    handler.execute(ctrl, ctrl.st.snapshot())
+                self.assertEqual(ctrl.st.snapshot()["phase"], int(phase))
+                self.assertEqual(ctrl.mission_end_reason, "RUNNING")
+                self.assertTrue(ctrl.cone_phase_detected)
+
+    def test_phase5_timeout_without_cone_stops_instead_of_ramming(self):
+        ctrl = _VisionController(Phase.PHASE5)
+        ctrl.time_camera_start = 1.0
+        ctrl.update_cone_frame(probability=0.0)
+        with patch("mission.phases.p5.time.time", return_value=100.0):
+            Phase5Handler().execute(ctrl, ctrl.st.snapshot())
+        self.assertEqual(ctrl.st.snapshot()["phase"], int(Phase.PHASE7))
+        self.assertEqual(ctrl.mission_end_reason, "PHASE5_VISUAL_LOST_TIMEOUT")
+
     def test_new_phase4_entry_rearms_stale_camera_recovery_before_give_up(self):
         ctrl = _VisionController(Phase.PHASE4)
         ctrl.phase4_camera_recovery_marker = 0.0

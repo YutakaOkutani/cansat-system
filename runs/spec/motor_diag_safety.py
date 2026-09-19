@@ -52,6 +52,7 @@ class MotorDiagnosticSafetyTest(unittest.TestCase):
             ((45, True, 45, True), (45, 40.5)),
             ((0, True, 0, True), (0, 0)),
             ((0, True, 45, True), (0, 40.5)),
+            ((100, True, 0, True), (100, 0)),
             ((45, False, 60, True), (45, 54)),
         ]
         for requested, expected in cases:

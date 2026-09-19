@@ -7,6 +7,8 @@ confirm a cone while the motor thread continues its search turn.
 """
 
 from mission.const import (
+    CAMERA_FRAME_STALE_STOP_SEC,
+    CONE_PROBABILITY_THRESHOLD_PHASE5,
     CAMERA_TINY_OCCUPANCY_THRESHOLD,
     CAMERA_WEAK_MIN_CANDIDATE_PROBABILITY,
     CAMERA_WEAK_MIN_HUE_SCORE,
@@ -36,6 +38,25 @@ def cone_centered_for_final_ram(snapshot):
         CONE_CENTER_POSITION - PHASE5_RAM_CENTER_TOLERANCE
         <= direction
         <= CONE_CENTER_POSITION + PHASE5_RAM_CENTER_TOLERANCE
+    )
+
+
+def camera_has_visible_cone(snapshot, now):
+    """Current detector evidence wins over phase timers and GPS fallback."""
+    updated_at = _float_value(snapshot.get("cone_updated_at"))
+    direction = _float_value(snapshot.get("cone_direction"), float("nan"))
+    if not (
+        snapshot.get("cone_valid", False)
+        and _float_value(snapshot.get("cone_sequence")) > 0
+        and updated_at > 0
+        and 0 <= float(now) - updated_at <= CAMERA_FRAME_STALE_STOP_SEC
+        and 0 <= direction <= 1
+    ):
+        return False
+    evidence = evaluate_cone_candidate(snapshot)
+    return bool(
+        evidence["candidate"] or evidence["close_reached"]
+        or evidence["probability"] > CONE_PROBABILITY_THRESHOLD_PHASE5
     )
 
 
