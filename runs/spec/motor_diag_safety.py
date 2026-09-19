@@ -10,11 +10,22 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from mission.const import (
+    DEVICE_MOTOR_1_PWM,
+    DEVICE_MOTOR_1_DIR,
+    DEVICE_MOTOR_2_PWM,
+    DEVICE_MOTOR_2_DIR,
     PHASE4_ALIGN_PIVOT_SPEED,
     PHASE4_SEARCH_OUTER_SPEED,
     PHASE5_BASE_SPEED,
     PHASE5_TURN_CLAMP,
 )
+
+manager_spec = importlib.util.spec_from_file_location(
+    "motor_output_manager_under_test", PROJECT_ROOT / "mission" / "mgr" / "mtr_mgr.py"
+)
+manager_module = importlib.util.module_from_spec(manager_spec)
+manager_spec.loader.exec_module(manager_module)
+MotorManager = manager_module.MotorManager
 
 MOTOR_DIAG_PATH = PROJECT_ROOT / "runs" / "diag" / "motor.py"
 spec = importlib.util.spec_from_file_location("motor_diag_under_test", MOTOR_DIAG_PATH)
@@ -24,6 +35,54 @@ spec.loader.exec_module(motor_diag)
 
 
 class MotorDiagnosticSafetyTest(unittest.TestCase):
+    def test_real_output_paths_apply_trim_and_turn_floor(self):
+        class Device:
+            value = 0.0
+
+        cases = [
+            # logical L/R request, expected physical L/R PWM after trim
+            ((100, True, 100, True), (100, 90)),
+            ((100, False, 100, False), (100, 90)),
+            ((45, True, 60, True), (65, 78)),
+            ((60, True, 45, True), (60 * 65 / 40.5, 65)),
+            ((45, True, 85, True), (65, 100)),
+            ((85, True, 45, True), (100, 65)),
+            ((60, True, 100, True), (65, 97.5)),
+            ((100, True, 60, True), (100, 65)),
+            ((45, True, 45, True), (45, 40.5)),
+            ((0, True, 0, True), (0, 0)),
+            ((0, True, 45, True), (0, 40.5)),
+            ((45, False, 60, True), (45, 54)),
+        ]
+        for requested, expected in cases:
+            with self.subTest(requested=requested):
+                pwm1, dir1, pwm2, dir2 = [Device() for _ in range(4)]
+                manager = MotorManager()
+                manager.devices = {
+                    DEVICE_MOTOR_1_PWM: pwm1, DEVICE_MOTOR_1_DIR: dir1,
+                    DEVICE_MOTOR_2_PWM: pwm2, DEVICE_MOTOR_2_DIR: dir2,
+                }
+                manager.motor_state = {}
+                manager.set_motors(*requested, ramp_time=0)
+                production_output = (pwm1.value, pwm2.value, dir1.value, dir2.value)
+                with patch.multiple(
+                    motor_diag,
+                    motor_1_pwm=pwm1, motor_1_dir=dir1,
+                    motor_2_pwm=pwm2, motor_2_dir=dir2,
+                    motor_state={
+                        'A': {'speed': 0.0, 'direction': True},
+                        'B': {'speed': 0.0, 'direction': True},
+                    },
+                ):
+                    motor_diag.set_motors(*requested, ramp_time=0)
+                self.assertEqual(
+                    (pwm1.value, pwm2.value, dir1.value, dir2.value), production_output
+                )
+                self.assertAlmostEqual(pwm1.value * 100, expected[0])
+                self.assertAlmostEqual(pwm2.value * 100, expected[1])
+                self.assertEqual(dir1.value, int(not requested[1]))
+                self.assertEqual(dir2.value, int(requested[3]))
+
     def test_every_phase_exposes_all_wasd_keys(self):
         self.assertEqual(set(motor_diag.PHASE_DRIVE_PROFILES), set("1234567"))
         for phase, profiles in motor_diag.PHASE_DRIVE_PROFILES.items():
@@ -38,7 +97,7 @@ class MotorDiagnosticSafetyTest(unittest.TestCase):
 
     def test_production_motor_trim_matches_current_airframe(self):
         self.assertEqual(motor_diag.MOTOR_SPEED_SCALE_1, 1.00)
-        self.assertEqual(motor_diag.MOTOR_SPEED_SCALE_2, 1.00)
+        self.assertEqual(motor_diag.MOTOR_SPEED_SCALE_2, 0.90)
 
     def test_logical_left_right_routes_to_measured_physical_channels(self):
         mapped = motor_diag.map_logical_wheels_to_physical(
@@ -48,7 +107,7 @@ class MotorDiagnosticSafetyTest(unittest.TestCase):
             False,
         )
 
-        self.assertEqual(mapped, (70.0, False, 30.0, True))
+        self.assertEqual(mapped, (30.0, True, 70.0, False))
 
     def test_manual_left_turn_drives_physical_right_wheel_faster(self):
         with patch.object(motor_diag, "set_motors") as set_motors:
@@ -57,8 +116,8 @@ class MotorDiagnosticSafetyTest(unittest.TestCase):
         set_motors.assert_called_once_with(60.0, 1, 100.0, 1)
         logical_call = set_motors.call_args.args
         mapped = motor_diag.map_logical_wheels_to_physical(*logical_call)
-        self.assertEqual(mapped[0], 100.0)
-        self.assertEqual(mapped[2], 60.0)
+        self.assertEqual(mapped[0], 60.0)
+        self.assertEqual(mapped[2], 100.0)
 
     def test_manual_right_turn_drives_physical_left_wheel_faster(self):
         with patch.object(motor_diag, "set_motors") as set_motors:
@@ -67,8 +126,8 @@ class MotorDiagnosticSafetyTest(unittest.TestCase):
         set_motors.assert_called_once_with(100.0, 1, 60.0, 1)
         logical_call = set_motors.call_args.args
         mapped = motor_diag.map_logical_wheels_to_physical(*logical_call)
-        self.assertEqual(mapped[0], 60.0)
-        self.assertEqual(mapped[2], 100.0)
+        self.assertEqual(mapped[0], 100.0)
+        self.assertEqual(mapped[2], 60.0)
 
     def test_phase3_navigation_profile_matches_production_outputs(self):
         forward = motor_diag.get_phase_drive_pattern("3", 0, "w")

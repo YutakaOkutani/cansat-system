@@ -4,6 +4,7 @@ from mission.const import (
     MOTOR_DIR_INVERT_2,
     MOTOR_LEFT_MTR_INDEX,
     MOTOR_RIGHT_MTR_INDEX,
+    MOTOR_TURN_MIN_SPEED,
 )
 
 
@@ -13,6 +14,19 @@ MANUAL_DRIVE_PATTERNS = {
     "a": ("Left", True, True),
     "d": ("Right", True, True),
 }
+
+
+def apply_turn_speed_floor(speed_1, speed_2, *, turning):
+    """Raise trimmed arc duties together; prioritize the floor over ratio at 100%.
+
+    Straight commands, stops and pivots are not boosted. The caller determines
+    turning from the logical request, before unequal motor trims are applied.
+    This is a steady-state target; soft-start ramps still begin at zero.
+    """
+    if not turning or min(speed_1, speed_2) <= 0:
+        return speed_1, speed_2
+    factor = max(1.0, MOTOR_TURN_MIN_SPEED / min(speed_1, speed_2))
+    return min(100.0, speed_1 * factor), min(100.0, speed_2 * factor)
 
 
 def motor_forward_to_dir_value(motor_index, forward):

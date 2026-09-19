@@ -258,8 +258,8 @@ class Phase3HeadingTest(unittest.TestCase):
             args[2],
             args[3],
         )
-        # Physical MTR2 is the left wheel and must be faster for a right turn.
-        self.assertGreater(physical[2], physical[0])
+        # Physical MTR1 is the left wheel and must be faster for a right turn.
+        self.assertGreater(physical[0], physical[2])
 
     def test_phase4_image_left_steers_physical_right_wheel_faster(self):
         ctrl = _HeadingOnlyController()
@@ -279,8 +279,8 @@ class Phase3HeadingTest(unittest.TestCase):
             args[2],
             args[3],
         )
-        # Physical MTR1 is the right wheel and must be faster for a left turn.
-        self.assertGreater(physical[0], physical[2])
+        # Physical MTR2 is the right wheel and must be faster for a left turn.
+        self.assertGreater(physical[2], physical[0])
 
     def test_phase4_roi_supported_weak_candidate_starts_center_hold(self):
         ctrl = _HeadingOnlyController()

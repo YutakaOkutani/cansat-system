@@ -312,16 +312,18 @@ MOTOR_RAMP_STEP = 0.05
 # 機体固有値: 現行単一機体のモーター配線・個体差に合わせた固定値。
 MOTOR_DIR_INVERT_1 = True
 MOTOR_DIR_INVERT_2 = False
-# 実機配線では物理MTR1が右輪、物理MTR2が左輪。
+# 走行会前のWASD実機確認に基づく配線: 物理MTR1が左輪、物理MTR2が右輪。
 # 操舵ロジックは常に「左輪、右輪」の順で指令し、この対応で物理chへ変換する。
-MOTOR_LEFT_MTR_INDEX = 2
-MOTOR_RIGHT_MTR_INDEX = 1
+MOTOR_LEFT_MTR_INDEX = 1
+MOTOR_RIGHT_MTR_INDEX = 2
 MANUAL_TURN_SPEED_RATIO = 3.0 / 5.0
+# 旋回時の定常PWM下限。ゲイン補正後に同比率で引き上げ、100%で制限する。
+MOTOR_TURN_MIN_SPEED = 65.0
 # モーター個体差補正 (PWM指令値に乗算)
 MOTOR_SPEED_SCALE_1 = 1.00
-MOTOR_SPEED_SCALE_2 = 1.00
+MOTOR_SPEED_SCALE_2 = 0.90  # 速い右輪を10%減速する初期調整値。実走で再調整する。
 # モーター個体差補正 (PWM指令値に加算, scale適用後)
-# 例: MTR1がまだ速いなら MOTOR_SPEED_OFFSET_1 = -2.0 のように下げる
+# 追加調整はまず各輪のMOTOR_SPEED_SCALEで行う。
 MOTOR_SPEED_OFFSET_1 = 0.0
 MOTOR_SPEED_OFFSET_2 = 0.0
 
@@ -339,7 +341,7 @@ LED_TIMEOUT_ALERT_FAST_SLEEP = 0.08
 RADIO_COMMAND_TIMEOUT_SEC = 10.0
 
 # 機体固有値: モーター・センサーのGPIO関連定数
-# Physical motor channels (fixed wiring): MTR1=RIGHT, MTR2=LEFT
+# Physical motor channels (fixed wiring): MTR1=LEFT, MTR2=RIGHT
 PIN_EN1 = 12
 PIN_PH1 = 13
 PIN_EN2 = 19

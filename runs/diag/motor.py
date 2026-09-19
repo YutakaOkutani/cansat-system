@@ -16,6 +16,7 @@ from mission.const import (
     MOTOR_SPEED_OFFSET_2,
     MOTOR_SPEED_SCALE_1,
     MOTOR_SPEED_SCALE_2,
+    MOTOR_TURN_MIN_SPEED,
     PARACHUTE_SEPARATION_SPEED,
     PHASE1_SOFTSTART_RAMP_TIME,
     PHASE1_SOFTSTART_STEP,
@@ -55,6 +56,7 @@ from mission.const import (
     PHASE4_SEARCH_OUTER_SPEED,
 )
 from mission.motor_map import (
+    apply_turn_speed_floor,
     get_manual_drive_pattern,
     map_logical_wheels_to_physical,
     motor_forward_to_dir_value,
@@ -423,7 +425,7 @@ def _apply_speed_scale(speed, motor_side):
 def set_motor(motor_side, speed, direction, ramp_time=0.6, step_interval=0.05):
     """
     Control motor duty and direction with a soft-start ramp.
-    :param motor_side: physical 'A' (MTR1 / right) or 'B' (MTR2 / left)
+    :param motor_side: physical 'A' (MTR1 / left) or 'B' (MTR2 / right)
     :param speed: PWM Duty Cycle (0 - 100)
     :param direction: 1 (Forward/High) or 0 (Reverse/Low)
     :param ramp_time: Time in seconds to ramp between duty changes.
@@ -517,6 +519,16 @@ def set_motors(
 
     target_motor_1 = _apply_speed_scale(speed_motor_1, 'A')
     target_motor_2 = _apply_speed_scale(speed_motor_2, 'B')
+    target_motor_1, target_motor_2 = apply_turn_speed_floor(
+        target_motor_1,
+        target_motor_2,
+        turning=(
+            min(speed_left, speed_right) > 0
+            and speed_left != speed_right
+            and bool(forward_left) == bool(forward_right)
+        ),
+    )
+    print(f"Target PWM after trim/turn floor: L={target_motor_1:.1f}% R={target_motor_2:.1f}%")
     current_motor_1, current_motor_2 = _ramp_pwm_dual(
         motor_1_pwm, current_motor_1, target_motor_1,
         motor_2_pwm, current_motor_2, target_motor_2,
@@ -627,6 +639,7 @@ def _print_phase_profile(phase, profile_index):
         f"Mode: P{phase}/{profile['name']} "
         f"({profile_index + 1}/{len(profiles)}) - {profile['description']}"
     )
+    print(f"  Requested duties below; output applies trim and a {MOTOR_TURN_MIN_SPEED:.0f}% turn floor.")
     for key in ("w", "a", "s", "d"):
         command = profile["commands"][key]
         print(
@@ -638,6 +651,7 @@ def _print_phase_profile(phase, profile_index):
 
 def print_profile_catalog():
     print("Available motor diagnostic profiles:")
+    print(f"  Profile duties are before motor trim and the {MOTOR_TURN_MIN_SPEED:.0f}% turn floor.")
     print("  manual: existing variable-duty W/A/S/D behavior")
     for phase, profiles in PHASE_DRIVE_PROFILES.items():
         for index in range(len(profiles)):
