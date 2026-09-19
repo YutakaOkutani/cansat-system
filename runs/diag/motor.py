@@ -12,6 +12,8 @@ if str(REPO_ROOT) not in sys.path:
 from mission.const import (
     GRASS_MIN_MOTOR_SPEED,
     MANUAL_TURN_SPEED_RATIO,
+    MOTOR_LEFT_MTR_INDEX,
+    MOTOR_RIGHT_MTR_INDEX,
     MOTOR_SPEED_OFFSET_1,
     MOTOR_SPEED_OFFSET_2,
     MOTOR_SPEED_SCALE_1,
@@ -43,9 +45,12 @@ from mission.const import (
     PHASE4_ALIGN_PIVOT_SPEED,
     PHASE4_MOTOR_RAMP_TIME,
     PHASE5_BASE_SPEED,
+    PHASE5_MID_SPEED,
+    PHASE5_NEAR_SPEED,
     PHASE5_MOTOR_RAMP_TIME,
     PHASE5_TURN_CLAMP,
     PHASE6_RAM_RAMP_TIME,
+    PHASE6_RAM_DURATION_SEC,
     PHASE6_RAM_SPEED,
     PIN_EN1,
     PIN_EN2,
@@ -322,11 +327,32 @@ PHASE_DRIVE_PROFILES = {
                 PHASE5_MOTOR_RAMP_TIME,
             ),
         ),
+        _profile(
+            "approach_mid",
+            "P5 medium-distance approach and maximum steering outputs.",
+            _wasd_commands(
+                PHASE5_MID_SPEED,
+                min(100.0, PHASE5_MID_SPEED + PHASE5_TURN_CLAMP),
+                max(GRASS_MIN_MOTOR_SPEED, PHASE5_MID_SPEED - PHASE5_TURN_CLAMP),
+                PHASE5_MOTOR_RAMP_TIME,
+            ),
+        ),
+        _profile(
+            "approach_near",
+            "P5 near-cone approach and maximum steering before final alignment.",
+            _wasd_commands(
+                PHASE5_NEAR_SPEED,
+                min(100.0, PHASE5_NEAR_SPEED + PHASE5_TURN_CLAMP),
+                max(GRASS_MIN_MOTOR_SPEED, PHASE5_NEAR_SPEED - PHASE5_TURN_CLAMP),
+                PHASE5_MOTOR_RAMP_TIME,
+            ),
+        ),
     ),
     "6": (
         _profile(
             "final_ram",
-            "P6 production final straight ram; A/D are diagnostic turns.",
+            f"P6 final straight ram (production: {PHASE6_RAM_DURATION_SEC:.1f}s; "
+            "diagnostic: runs until stop); A/D are diagnostic turns.",
             _straight_only_commands(
                 PHASE6_RAM_SPEED,
                 PHASE6_RAM_RAMP_TIME,
@@ -463,6 +489,25 @@ def set_motor(motor_side, speed, direction, ramp_time=0.6, step_interval=0.05):
     state['direction'] = direction
 
 
+def _target_motor_speeds(speed_left, forward_left, speed_right, forward_right):
+    """Return the same physical PWM targets for display and GPIO output."""
+    speed_motor_1, _, speed_motor_2, _ = map_logical_wheels_to_physical(
+        speed_left, forward_left, speed_right, forward_right,
+    )
+    target_motor_1 = _apply_speed_scale(speed_motor_1, 'A')
+    target_motor_2 = _apply_speed_scale(speed_motor_2, 'B')
+    target_motor_1, target_motor_2 = apply_turn_speed_floor(
+        target_motor_1,
+        target_motor_2,
+        turning=(
+            min(speed_left, speed_right) > 0
+            and speed_left != speed_right
+            and bool(forward_left) == bool(forward_right)
+        ),
+    )
+    return target_motor_1, target_motor_2
+
+
 def set_motors(
     speed_left,
     forward_left,
@@ -517,16 +562,8 @@ def set_motors(
     motor_1_dir.value = motor_forward_to_dir_value(1, forward_motor_1)
     motor_2_dir.value = motor_forward_to_dir_value(2, forward_motor_2)
 
-    target_motor_1 = _apply_speed_scale(speed_motor_1, 'A')
-    target_motor_2 = _apply_speed_scale(speed_motor_2, 'B')
-    target_motor_1, target_motor_2 = apply_turn_speed_floor(
-        target_motor_1,
-        target_motor_2,
-        turning=(
-            min(speed_left, speed_right) > 0
-            and speed_left != speed_right
-            and bool(forward_left) == bool(forward_right)
-        ),
+    target_motor_1, target_motor_2 = _target_motor_speeds(
+        speed_left, forward_left, speed_right, forward_right,
     )
     print(f"Target PWM after trim/turn floor: L={target_motor_1:.1f}% R={target_motor_2:.1f}%")
     current_motor_1, current_motor_2 = _ramp_pwm_dual(
@@ -625,33 +662,52 @@ def _apply_phase_drive_pattern(phase, profile_index, cmd):
 
 def _format_wheel(speed, forward):
     direction = "F" if forward else "R"
-    return f"{float(speed):.0f}%{direction}"
+    return f"{float(speed):.1f}%{direction}"
 
 
-def _print_phase_profile(phase, profile_index):
-    if phase == "manual":
-        print("Mode: manual (existing variable-duty WASD control)")
-        return
-    profiles = PHASE_DRIVE_PROFILES[phase]
-    profile_index %= len(profiles)
-    profile = profiles[profile_index]
-    print(
-        f"Mode: P{phase}/{profile['name']} "
-        f"({profile_index + 1}/{len(profiles)}) - {profile['description']}"
+def _format_output(speed_left, forward_left, speed_right, forward_right):
+    targets = _target_motor_speeds(speed_left, forward_left, speed_right, forward_right)
+    return (
+        f"L={_format_wheel(targets[MOTOR_LEFT_MTR_INDEX - 1], forward_left)} "
+        f"R={_format_wheel(targets[MOTOR_RIGHT_MTR_INDEX - 1], forward_right)}"
     )
-    print(f"  Requested duties below; output applies trim and a {MOTOR_TURN_MIN_SPEED:.0f}% turn floor.")
-    for key in ("w", "a", "s", "d"):
-        command = profile["commands"][key]
+
+
+def _format_command_output(command):
+    return _format_output(
+        command["speed_left"], command["forward_left"],
+        command["speed_right"], command["forward_right"],
+    )
+
+
+def _print_phase_profile(phase, profile_index, manual_speed=DEFAULT_SPEED):
+    if phase == "manual":
+        print(f"Mode: manual (requested duty {manual_speed:.0f}%)")
+        commands = {}
+        for key in "wasd":
+            pattern = get_manual_drive_pattern(key, manual_speed)
+            commands[key] = _command(
+                pattern["label"], pattern["speed_a"], pattern["forward_a"],
+                pattern["speed_b"], pattern["forward_b"], DEFAULT_RAMP_TIME,
+            )
+    else:
+        profiles = PHASE_DRIVE_PROFILES[phase]
+        profile_index %= len(profiles)
+        profile = profiles[profile_index]
         print(
-            f"  {key.upper()}: {command['label']} "
-            f"L={_format_wheel(command['speed_left'], command['forward_left'])} "
-            f"R={_format_wheel(command['speed_right'], command['forward_right'])}"
+            f"Mode: P{phase}/{profile['name']} "
+            f"({profile_index + 1}/{len(profiles)}) - {profile['description']}"
         )
+        commands = profile["commands"]
+    print(f"  Target PWM after trim / {MOTOR_TURN_MIN_SPEED:.0f}% turn floor (F=forward, R=reverse):")
+    for key in ("w", "a", "s", "d"):
+        command = commands[key]
+        print(f"  {key.upper()}: {command['label']} {_format_command_output(command)}")
 
 
 def print_profile_catalog():
     print("Available motor diagnostic profiles:")
-    print(f"  Profile duties are before motor trim and the {MOTOR_TURN_MIN_SPEED:.0f}% turn floor.")
+    print(f"  Duties include motor trim and the {MOTOR_TURN_MIN_SPEED:.0f}% turn floor.")
     print("  manual: existing variable-duty W/A/S/D behavior")
     for phase, profiles in PHASE_DRIVE_PROFILES.items():
         for index in range(len(profiles)):
@@ -786,8 +842,8 @@ def main():
         setup()
         print("Motor Control Ready")
         _print_controls()
-        print(f"Current Duty: {current_speed:.0f}%")
-        _print_phase_profile(active_phase, profile_index)
+        print(f"Requested Duty: {current_speed:.0f}%")
+        _print_phase_profile(active_phase, profile_index, current_speed)
         while True:
             cmd = _get_command()
 
@@ -809,14 +865,14 @@ def main():
 
             if cmd == '?':
                 _print_controls()
-                _print_phase_profile(active_phase, profile_index)
+                _print_phase_profile(active_phase, profile_index, current_speed)
                 continue
 
             if cmd in "01234567":
                 stop()
                 active_phase = "manual" if cmd == "0" else cmd
                 profile_index = 0
-                _print_phase_profile(active_phase, profile_index)
+                _print_phase_profile(active_phase, profile_index, current_speed)
                 continue
 
             if cmd == 'm':
@@ -827,13 +883,14 @@ def main():
                     profile_index = (
                         profile_index + 1
                     ) % len(PHASE_DRIVE_PROFILES[active_phase])
-                    _print_phase_profile(active_phase, profile_index)
+                    _print_phase_profile(active_phase, profile_index, current_speed)
                 continue
 
             if cmd in ('+', '='):
                 if active_phase == "manual":
                     current_speed = _clamp_speed(current_speed + SPEED_STEP)
-                    print(f"Duty Up -> {current_speed:.0f}%")
+                    print(f"Requested Duty Up -> {current_speed:.0f}%")
+                    _print_phase_profile(active_phase, profile_index, current_speed)
                 else:
                     print("Phase profiles use fixed production duty. Press 0 for adjustable manual mode.")
                 continue
@@ -841,7 +898,8 @@ def main():
             if cmd in ('-', '_'):
                 if active_phase == "manual":
                     current_speed = _clamp_speed(current_speed - SPEED_STEP)
-                    print(f"Duty Down -> {current_speed:.0f}%")
+                    print(f"Requested Duty Down -> {current_speed:.0f}%")
+                    _print_phase_profile(active_phase, profile_index, current_speed)
                 else:
                     print("Phase profiles use fixed production duty. Press 0 for adjustable manual mode.")
                 continue
@@ -854,21 +912,20 @@ def main():
                 print(
                     f"P{active_phase}/{PHASE_DRIVE_PROFILES[active_phase][profile_index]['name']} "
                     f"{pattern['label']}: "
-                    f"L={_format_wheel(pattern['speed_left'], pattern['forward_left'])} "
-                    f"R={_format_wheel(pattern['speed_right'], pattern['forward_right'])}"
+                    f"{_format_command_output(pattern)}"
                 )
                 _apply_phase_drive_pattern(active_phase, profile_index, cmd)
             elif cmd == 'w':
-                print(f"Forward ({current_speed:.0f}%)")
+                print(f"Forward (requested duty {current_speed:.0f}%)")
                 drive_forward(current_speed)
             elif cmd == 's':
-                print(f"Backward ({current_speed:.0f}%)")
+                print(f"Backward (requested duty {current_speed:.0f}%)")
                 drive_backward(current_speed)
             elif cmd == 'a':
-                print(f"Left ({current_speed:.0f}%)")
+                print(f"Left (requested duty {current_speed:.0f}%)")
                 turn_left(current_speed)
             elif cmd == 'd':
-                print(f"Right ({current_speed:.0f}%)")
+                print(f"Right (requested duty {current_speed:.0f}%)")
                 turn_right(current_speed)
             else:
                 print(f"Unknown command '{cmd}'. Press ? for help.")

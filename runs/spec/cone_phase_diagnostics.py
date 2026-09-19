@@ -326,6 +326,26 @@ class ConePhaseDiagnosticsTest(unittest.TestCase):
         self.assertEqual(ctrl.cone_phase_decision, "p5_reached_to_p6")
         self.assertEqual(ctrl.st.snapshot()["phase"], int(Phase.PHASE6))
 
+    def test_phase5_off_center_close_cone_requires_new_centered_confirmations(self):
+        ctrl = _VisionController(Phase.PHASE5)
+        handler = Phase5Handler()
+        for now, direction, count in (
+            (100.0, 0.50, 1), (100.2, 0.80, 0),
+            (100.4, 0.50, 1), (100.6, 0.50, 2),
+        ):
+            ctrl.update_cone_frame(
+                direction=direction, probability=0.08, reached=True,
+                observation_time=now,
+            )
+            with patch("mission.phases.p5.time.time", return_value=now):
+                handler.execute(ctrl, ctrl.st.snapshot())
+            self.assertEqual(ctrl.phase5_reach_confirm_count, count)
+            self.assertEqual(ctrl.count_cone_lost, 0)
+            self.assertEqual(
+                ctrl.st.snapshot()["phase"],
+                int(Phase.PHASE6 if count == 2 else Phase.PHASE5),
+            )
+
     def test_phase4_confirmation_counts_each_camera_sequence_once(self):
         ctrl = _VisionController(Phase.PHASE4)
         ctrl.update_cone_frame(direction=0.50, probability=0.30)

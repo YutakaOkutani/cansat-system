@@ -63,7 +63,7 @@ Current numeric thresholds, pins, speeds, and budgets are authoritative in `miss
 - Keep the P4 search arc continuous while the camera is fresh; an abrupt observation stop changes the camera pitch on this airframe.
 - Keep the camera detector and capture pipeline inactive throughout P0-P3. Activate them only on entry to P4/P5, and release them whenever the mission returns to a non-vision phase; a camera disconnect before P4 must not affect navigation or motor control.
 - Compensate P4 candidate direction with heading when available and reject discontinuous vertical position or scale before confirmation.
-- In P5, reset reach confirmation on non-reached evidence.
+- In P5, confirm close-range evidence only while the cone is centered for a straight final ram; reset confirmation when it leaves that window. Continue image-directed steering for an off-center close cone, using the latest image direction rather than a lagging filtered direction.
 - Distinguish cone loss (`P5 -> P4`) from a P4 timeout or exhausted camera recovery (`P4 -> P7`).
 - In P4, allow at most three camera recreations at five-second intervals and require a valid captured frame before declaring recovery; retain at least a 15-second recovery window.
 - A P4 local or cumulative timeout must stop motors and skip P5/P6 so that no unverified final ram occurs.

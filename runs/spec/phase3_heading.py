@@ -128,7 +128,7 @@ class Phase3HeadingTest(unittest.TestCase):
         self.assertTrue(args[3])
         self.assertEqual(kwargs["cmd_type"], "phase4_search_arc")
 
-    def test_phase4_single_candidate_only_slows_established_search_arc(self):
+    def test_phase4_single_candidate_applies_stronger_centering_arc(self):
         ctrl = _HeadingOnlyController()
 
         ctrl._drive_phase4_camera(
@@ -140,7 +140,7 @@ class Phase3HeadingTest(unittest.TestCase):
         )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (45, 60))
+        self.assertEqual((args[0], args[2]), (45, 85))
         self.assertGreaterEqual(min(args[0], args[2]), 45.0)
         self.assertTrue(args[1])
         self.assertTrue(args[3])
@@ -215,7 +215,7 @@ class Phase3HeadingTest(unittest.TestCase):
                 )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (60, 45))
+        self.assertEqual((args[0], args[2]), (81, 45))
         self.assertEqual(kwargs["cmd_type"], "phase4_candidate_capture_arc")
 
     def test_phase4_centered_single_candidate_moves_straight_without_rotation(self):
@@ -388,7 +388,7 @@ class Phase3HeadingTest(unittest.TestCase):
                 )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (45, 60))
+        self.assertEqual((args[0], args[2]), (45, 81))
         self.assertEqual(kwargs["cmd_type"], "phase4_candidate_capture_arc")
 
     def test_phase4_three_fresh_frames_confirm_right_image_steering(self):
@@ -406,7 +406,7 @@ class Phase3HeadingTest(unittest.TestCase):
                 )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (60, 45))
+        self.assertEqual((args[0], args[2]), (81, 45))
         self.assertEqual(kwargs["cmd_type"], "phase4_candidate_capture_arc")
 
     def test_phase5_approach_calls_configured_maximum_steering_arc(self):
@@ -420,7 +420,7 @@ class Phase3HeadingTest(unittest.TestCase):
         )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (45.0, 87.0))
+        self.assertEqual((args[0], args[2]), (45.0, 100.0))
         self.assertTrue(args[1])
         self.assertTrue(args[3])
         self.assertEqual(kwargs["cmd_type"], "phase5_approach_steer_left")
@@ -436,7 +436,7 @@ class Phase3HeadingTest(unittest.TestCase):
         )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (87.0, 45.0))
+        self.assertEqual((args[0], args[2]), (100.0, 45.0))
         self.assertEqual(kwargs["cmd_type"], "phase5_approach_steer_right")
 
     def test_phase5_direction_filter_updates_once_per_camera_sequence(self):
@@ -511,6 +511,30 @@ class Phase3HeadingTest(unittest.TestCase):
         self.assertEqual((args[0], args[2]), (0.0, 0.0))
         self.assertEqual(kwargs["cmd_type"], "stop")
 
+    def test_phase5_close_off_center_cone_steers_using_latest_image(self):
+        for direction, expected_side in ((0.2, "left"), (0.8, "right")):
+            with self.subTest(direction=direction):
+                ctrl = _HeadingOnlyController()
+                ctrl.phase45_filtered_cone_dir = 1.0 - direction
+                ctrl.phase45_filtered_cone_seq = 1
+                ctrl._drive_phase5_camera(self._fresh_camera_snapshot(
+                    cone_sequence=1, cone_probability=0.08,
+                    cone_is_reached=True, cone_direction=direction,
+                    cone_debug={"occupancy": 0.10},
+                ))
+                args, kwargs = ctrl.motor_commands[-1]
+                self.assertEqual(kwargs["cmd_type"], f"phase5_approach_steer_{expected_side}")
+                self.assertEqual(args[0] > args[2], expected_side == "right")
+
+    def test_phase5_small_offset_has_stronger_steering_without_saturation(self):
+        ctrl = _HeadingOnlyController()
+        ctrl._drive_phase5_camera(self._fresh_camera_snapshot(
+            cone_probability=0.5, cone_direction=0.60,
+        ))
+        args, _ = ctrl.motor_commands[-1]
+        self.assertAlmostEqual(args[0], 95.0)
+        self.assertAlmostEqual(args[2], 75.0)
+
     def test_phase5_roi_supported_weak_candidate_remains_trackable(self):
         ctrl = _HeadingOnlyController()
 
@@ -535,7 +559,7 @@ class Phase3HeadingTest(unittest.TestCase):
         )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (45, 45))
+        self.assertEqual((args[0], args[2]), (75, 75))
         self.assertEqual(kwargs["cmd_type"], "phase5_approach_forward")
 
     def test_phase5_brief_loss_keeps_turning_toward_last_image_direction(self):

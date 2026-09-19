@@ -36,6 +36,7 @@ class Phase6Handler(BasePhaseHandler):
             led_green.on()
 
         if getattr(controller, "mission_total_timeout_triggered", False):
+            controller.stop_motors()
             if getattr(controller, "mission_end_reason", "RUNNING") == "RUNNING":
                 controller.mission_end_reason = "MISSION_TOTAL_TIMEOUT"
             controller.st.update_navigation(phase=int(Phase.PHASE7))

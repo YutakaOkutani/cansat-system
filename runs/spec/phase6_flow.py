@@ -41,7 +41,28 @@ class _Phase6Controller:
 
 class Phase6FlowTest(unittest.TestCase):
     def test_final_ram_duration_is_full_goal_push(self):
-        self.assertEqual(PHASE6_RAM_DURATION_SEC, 2.5)
+        self.assertEqual(PHASE6_RAM_DURATION_SEC, 5.0)
+        self.assertEqual(PHASE6_RAM_SPEED, 75)
+
+    def test_ram_continues_past_previous_deadline(self):
+        controller = _Phase6Controller()
+        handler = Phase6Handler()
+        for now in (100.0, 103.0, 104.9):
+            with patch("mission.phases.p6.time.time", return_value=now):
+                handler.execute(controller, controller.st.snapshot())
+            self.assertEqual(controller.st.snapshot()["phase"], int(Phase.PHASE6))
+            self.assertEqual(controller.motor_commands[-1][1]["cmd_type"], "phase6_final_ram")
+
+    def test_total_timeout_stops_ram_immediately(self):
+        controller = _Phase6Controller()
+        handler = Phase6Handler()
+        with patch("mission.phases.p6.time.time", return_value=100.0):
+            handler.execute(controller, controller.st.snapshot())
+        controller.mission_total_timeout_triggered = True
+        with patch("mission.phases.p6.time.time", return_value=101.0):
+            handler.execute(controller, controller.st.snapshot())
+        self.assertEqual(controller.motor_commands[-1][1]["cmd_type"], "stop")
+        self.assertEqual(controller.st.snapshot()["phase"], int(Phase.PHASE7))
 
     def test_cone_loss_during_final_ram_never_falls_back(self):
         controller = _Phase6Controller()

@@ -23,9 +23,10 @@ from mission.const import (
     GPS_PHASE45_MAX_DISTANCE,
     LED_INTERVAL_PHASE5,
     Phase,
+    PHASE5_RAM_CENTER_TOLERANCE,
     TIMEOUT_PHASE_5,
 )
-from mission.cone_candidate import evaluate_cone_candidate
+from mission.cone_candidate import cone_centered_for_final_ram, evaluate_cone_candidate
 from mission.nav import calc_distance_and_azimuth
 from mission.phases.base import BasePhaseHandler
 
@@ -78,7 +79,7 @@ class Phase5Handler(BasePhaseHandler):
         controller.cone_phase_decision = "p5_precheck"
         controller.cone_phase_threshold = float(CONE_PROBABILITY_THRESHOLD_PHASE5)
         controller.cone_phase_reached_probability_threshold = 0.0
-        controller.cone_phase_center_tolerance = 0.0
+        controller.cone_phase_center_tolerance = float(PHASE5_RAM_CENTER_TOLERANCE)
         controller.cone_phase_direction_tolerance = 0.0
         controller.cone_phase_required_confirm_frames = int(CONE_PHASE5_REACH_CONFIRM_FRAMES)
         controller.cone_phase_detected = False
@@ -126,8 +127,10 @@ class Phase5Handler(BasePhaseHandler):
         now = time.time()
         camera_fresh, cone_sequence = self._fresh_camera_frame(current_snapshot, now)
         evidence = evaluate_cone_candidate(current_snapshot)
+        centered = cone_centered_for_final_ram(current_snapshot)
+        controller.cone_phase_centered = bool(camera_fresh and centered)
         is_reach_effective = bool(
-            camera_fresh and evidence["close_reached"]
+            camera_fresh and evidence["close_reached"] and centered
         )
         weak_detect = bool(camera_fresh and evidence["weak"])
         is_det = (
@@ -135,7 +138,7 @@ class Phase5Handler(BasePhaseHandler):
             and (
                 cone_prob > CONE_PROBABILITY_THRESHOLD_PHASE5
                 or weak_detect
-                or is_reach_effective
+                or evidence["close_reached"]
             )
         )
         controller.cone_phase_detected = bool(is_det)
@@ -174,6 +177,8 @@ class Phase5Handler(BasePhaseHandler):
             controller.cone_phase_decision = (
                 "p5_tracking_weak" if weak_detect else "p5_tracking"
             )
+            if evidence["close_reached"] and not centered:
+                controller.cone_phase_decision = "p5_align_before_ram"
             controller.count_cone_lost = 0
 
         if controller.count_cone_lost >= CONE_LOST_COUNT_LIMIT:

@@ -196,15 +196,15 @@ class MotorDiagnosticSafetyTest(unittest.TestCase):
             (phase5_left["speed_left"], phase5_left["speed_right"]),
             (
                 45.0,
-                float(PHASE5_BASE_SPEED + PHASE5_TURN_CLAMP),
+                min(100.0, float(PHASE5_BASE_SPEED + PHASE5_TURN_CLAMP)),
             ),
         )
 
     def test_phase6_profile_uses_grass_safe_minimum_speed(self):
         expected_speeds = {
-            "w": (45.0, 45.0),
+            "w": (75.0, 75.0),
             "a": (45.0, 75.0),
-            "s": (45.0, 45.0),
+            "s": (75.0, 75.0),
             "d": (75.0, 45.0),
         }
         for cmd, expected in expected_speeds.items():

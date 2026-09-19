@@ -17,6 +17,8 @@ from mission.const import (
     CAMERA_WEAK_RELAXED_SV_SCORE,
     CAMERA_WEAK_STRONG_HUE_SCORE,
     CONE_PROBABILITY_THRESHOLD_PHASE4,
+    CONE_CENTER_POSITION,
+    PHASE5_RAM_CENTER_TOLERANCE,
 )
 
 
@@ -25,6 +27,16 @@ def _float_value(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def cone_centered_for_final_ram(snapshot):
+    """Require a valid image direction before committing to a straight ram."""
+    direction = _float_value(snapshot.get("cone_direction"), float("nan"))
+    return (
+        CONE_CENTER_POSITION - PHASE5_RAM_CENTER_TOLERANCE
+        <= direction
+        <= CONE_CENTER_POSITION + PHASE5_RAM_CENTER_TOLERANCE
+    )
 
 
 def evaluate_cone_candidate(snapshot):

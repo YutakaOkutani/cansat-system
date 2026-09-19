@@ -116,7 +116,7 @@ from mission.const import (
     TURN_GAIN_SCALE_MIN,
     Phase,
 )
-from mission.cone_candidate import evaluate_cone_candidate
+from mission.cone_candidate import cone_centered_for_final_ram, evaluate_cone_candidate
 from mission.motor_map import (
     apply_turn_speed_floor,
     forward_to_dir_value,
@@ -901,7 +901,8 @@ class MotorManager:
         if not self._camera_observation_fresh(snapshot, now):
             self.stop_motors()
             return
-        if evaluate_cone_candidate(snapshot)["close_reached"]:
+        close_reached = evaluate_cone_candidate(snapshot)["close_reached"]
+        if close_reached and cone_centered_for_final_ram(snapshot):
             self.stop_motors()
             return
         cone_seen = self._phase45_cone_seen(
@@ -923,6 +924,12 @@ class MotorManager:
             if filtered_direction is not None
             else CONE_CENTER_POSITION
         )
+        if close_reached:
+            # Final alignment must follow the latest image, not a lagging EMA
+            # that can still point to the opposite side of the cone.
+            steer_direction = self._snapshot_float(
+                snapshot, "cone_direction", CONE_CENTER_POSITION
+            )
         error = steer_direction - CONE_CENTER_POSITION
         approach_speed = self._phase5_approach_speed(snapshot)
         if abs(error) <= float(PHASE5_STEER_DEADBAND):
