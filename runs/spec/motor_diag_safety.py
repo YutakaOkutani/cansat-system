@@ -196,7 +196,7 @@ class MotorDiagnosticSafetyTest(unittest.TestCase):
         self.assertEqual(
             (phase5_left["speed_left"], phase5_left["speed_right"]),
             (
-                45.0,
+                65.0,
                 min(100.0, float(PHASE5_BASE_SPEED + PHASE5_TURN_CLAMP)),
             ),
         )

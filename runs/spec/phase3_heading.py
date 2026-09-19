@@ -73,6 +73,45 @@ class _HeadingOnlyController(MotorManager):
 
 
 class Phase3HeadingTest(unittest.TestCase):
+    def test_camera_commands_update_once_per_frame_and_stop_when_next_frame_is_late(self):
+        for phase in (4, 5):
+            with self.subTest(phase=phase):
+                ctrl = _HeadingOnlyController()
+                drive = getattr(ctrl, f"_drive_phase{phase}_camera")
+                snapshot = self._fresh_camera_snapshot(
+                    cone_sequence=1, cone_updated_at=100.0,
+                    cone_probability=0.5, cone_direction=0.85,
+                    cone_debug={"strict_red_ok": 1},
+                )
+                for now in (100.0, 100.02, 100.10, 100.30, 100.50):
+                    with patch.object(mtr_mgr_under_test.time, "time", return_value=now):
+                        drive(snapshot)
+                self.assertEqual(len(ctrl.motor_commands), 1)
+                args, kwargs = ctrl.motor_commands[-1]
+                self.assertEqual((args[0], args[2]), (85, 65))
+                self.assertEqual(kwargs["ramp_time"], 0.20)
+                with patch.object(mtr_mgr_under_test.time, "time", return_value=100.70):
+                    drive(snapshot)
+                self.assertEqual(ctrl.motor_commands[-1][1]["cmd_type"], "stop")
+                with patch.object(mtr_mgr_under_test.time, "time", return_value=100.80):
+                    drive(dict(snapshot, cone_sequence=2, cone_updated_at=100.80))
+                self.assertNotEqual(ctrl.motor_commands[-1][1]["cmd_type"], "stop")
+
+    def test_camera_command_hold_adapts_to_faster_frames_without_reusing_them(self):
+        ctrl = _HeadingOnlyController()
+        for sequence in range(1, 11):
+            now = 100.0 + sequence * 0.1
+            snapshot = self._fresh_camera_snapshot(
+                cone_sequence=sequence, cone_updated_at=now,
+                cone_probability=0.5, cone_direction=0.60,
+            )
+            with patch.object(mtr_mgr_under_test.time, "time", return_value=now):
+                ctrl._drive_phase5_camera(snapshot)
+        self.assertLess(ctrl.camera_control_frames[5][2], 0.15)
+        with patch.object(mtr_mgr_under_test.time, "time", return_value=101.21):
+            ctrl._drive_phase5_camera(snapshot)
+        self.assertEqual(ctrl.motor_commands[-1][1]["cmd_type"], "stop")
+
     def test_visible_cone_at_edge_survives_capture_window_expiry(self):
         ctrl = _HeadingOnlyController()
         for sequence, now in ((1, 100.0), (2, 104.0), (3, 110.0)):
@@ -83,7 +122,7 @@ class Phase3HeadingTest(unittest.TestCase):
                     cone_debug={"strict_red_ok": 1, "occupancy": 0.01},
                 ))
             args, kwargs = ctrl.motor_commands[-1]
-            self.assertEqual((args[0], args[2]), (100, 0))
+            self.assertEqual((args[0], args[2]), (85, 65))
             self.assertIn("edge_right", kwargs["cmd_type"])
 
     def test_edge_turn_releases_from_image_position_not_elapsed_time(self):
@@ -95,8 +134,8 @@ class Phase3HeadingTest(unittest.TestCase):
             ))
             args, kwargs = ctrl.motor_commands[-1]
             self.assertEqual("edge_right" in kwargs["cmd_type"], edge)
-            self.assertEqual(args[0], 100)
-            self.assertAlmostEqual(args[2], 0 if edge else 65)
+            self.assertEqual(args[0], 85 if edge else 93)
+            self.assertAlmostEqual(args[2], 65 if edge else 77)
 
     @staticmethod
     def _fresh_camera_snapshot(**overrides):
@@ -165,8 +204,8 @@ class Phase3HeadingTest(unittest.TestCase):
         )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (0, 100))
-        self.assertEqual(min(args[0], args[2]), 0.0)
+        self.assertEqual((args[0], args[2]), (65, 85))
+        self.assertEqual(min(args[0], args[2]), 65.0)
         self.assertTrue(args[1])
         self.assertTrue(args[3])
         self.assertEqual(kwargs["cmd_type"], "phase4_candidate_observe_edge_left")
@@ -240,7 +279,7 @@ class Phase3HeadingTest(unittest.TestCase):
                 )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (100, 0))
+        self.assertEqual((args[0], args[2]), (85, 65))
         self.assertEqual(kwargs["cmd_type"], "phase4_candidate_capture_edge_right")
 
     def test_phase4_centered_single_candidate_moves_straight_without_rotation(self):
@@ -273,7 +312,7 @@ class Phase3HeadingTest(unittest.TestCase):
 
         args, kwargs = ctrl.motor_commands[-1]
         self.assertGreater(args[0], args[2])
-        self.assertAlmostEqual(args[0], 64.2)
+        self.assertAlmostEqual(args[0], 53.0)
         self.assertEqual(args[2], 45)
         self.assertEqual(kwargs["cmd_type"], "phase4_candidate_observe_arc")
 
@@ -413,7 +452,7 @@ class Phase3HeadingTest(unittest.TestCase):
                 )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (0, 100))
+        self.assertEqual((args[0], args[2]), (65, 85))
         self.assertEqual(kwargs["cmd_type"], "phase4_candidate_capture_edge_left")
 
     def test_phase4_three_fresh_frames_confirm_right_image_steering(self):
@@ -431,7 +470,7 @@ class Phase3HeadingTest(unittest.TestCase):
                 )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (100, 0))
+        self.assertEqual((args[0], args[2]), (85, 65))
         self.assertEqual(kwargs["cmd_type"], "phase4_candidate_capture_edge_right")
 
     def test_phase5_approach_calls_configured_maximum_steering_arc(self):
@@ -445,7 +484,7 @@ class Phase3HeadingTest(unittest.TestCase):
         )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (0.0, 100.0))
+        self.assertEqual((args[0], args[2]), (65.0, 85.0))
         self.assertTrue(args[1])
         self.assertTrue(args[3])
         self.assertEqual(kwargs["cmd_type"], "phase5_approach_edge_left")
@@ -461,7 +500,7 @@ class Phase3HeadingTest(unittest.TestCase):
         )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (100.0, 0.0))
+        self.assertEqual((args[0], args[2]), (85.0, 65.0))
         self.assertEqual(kwargs["cmd_type"], "phase5_approach_edge_right")
 
     def test_phase5_direction_filter_updates_once_per_camera_sequence(self):
@@ -551,14 +590,14 @@ class Phase3HeadingTest(unittest.TestCase):
                 self.assertEqual(kwargs["cmd_type"], f"phase5_approach_edge_{expected_side}")
                 self.assertEqual(args[0] > args[2], expected_side == "right")
 
-    def test_phase5_small_offset_accelerates_left_to_full_duty(self):
+    def test_phase5_small_offset_uses_moderated_left_acceleration(self):
         ctrl = _HeadingOnlyController()
         ctrl._drive_phase5_camera(self._fresh_camera_snapshot(
             cone_probability=0.5, cone_direction=0.60,
         ))
         args, _ = ctrl.motor_commands[-1]
-        self.assertAlmostEqual(args[0], 100.0)
-        self.assertAlmostEqual(args[2], 65.0)
+        self.assertAlmostEqual(args[0], 93.0)
+        self.assertAlmostEqual(args[2], 77.0)
 
     def test_phase5_roi_supported_weak_candidate_remains_trackable(self):
         ctrl = _HeadingOnlyController()
@@ -634,7 +673,7 @@ class Phase3HeadingTest(unittest.TestCase):
         self.assertEqual((args[0], args[2]), (0.0, 0.0))
         self.assertEqual(kwargs["cmd_type"], "stop")
 
-    def test_normal_roi_frame_interval_does_not_stop_phase4_motion(self):
+    def test_late_camera_frame_stops_before_general_stale_deadline(self):
         ctrl = _HeadingOnlyController()
         now = time.time()
 
@@ -643,8 +682,8 @@ class Phase3HeadingTest(unittest.TestCase):
         )
 
         args, kwargs = ctrl.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (45, int(PHASE4_SEARCH_OUTER_SPEED)))
-        self.assertEqual(kwargs["cmd_type"], "phase4_search_arc")
+        self.assertEqual((args[0], args[2]), (0, 0))
+        self.assertEqual(kwargs["cmd_type"], "stop")
 
     def test_phase4_search_remains_continuous_across_distinct_frames(self):
         ctrl = _HeadingOnlyController()

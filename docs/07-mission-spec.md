@@ -61,7 +61,7 @@ Current numeric thresholds, pins, speeds, and budgets are authoritative in `miss
 - Keep detector acquisition/normalization in the sensor/vision layer and mission interpretation in the Phase.
 - Require short-term consistency for P4 detection; a weak single frame must not transition.
 - A fresh visible cone overrides capture windows, local/cumulative P4/P5 timeouts, and GPS disagreement. Follow its current image position; resume search only after visual loss. The global mission deadline still stops the mission.
-- At the image edge, stop the inner wheel and drive the outer wheel at full duty to recover margin. Return to a forward arc using image-error hysteresis, not a timed pulse; the powered-wheel floor must not restart a stopped inner wheel.
+- At the image edge, use a moderated both-wheels-forward arc with image-error hysteresis. Issue at most one motion command per new camera frame. Estimate the frame period from observation timestamps and stop when the next frame is late, bounded by the configured hold ceiling; keep stale-frame and global-stop checks responsive.
 - Keep the camera detector and capture pipeline inactive throughout P0-P3. Activate them only on entry to P4/P5, and release them whenever the mission returns to a non-vision phase; a camera disconnect before P4 must not affect navigation or motor control.
 - Compensate P4 candidate direction with heading when available and reject discontinuous vertical position or scale before confirmation.
 - In P5, confirm close-range evidence only while the cone is centered for a straight final ram; reset confirmation when it leaves that window. Continue image-directed steering for an off-center close cone, using the latest image direction rather than a lagging filtered direction.

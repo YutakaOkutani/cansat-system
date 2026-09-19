@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from mission.const import (
     CAMERA_EDGE_TURN_SPEED,
+    CAMERA_EDGE_TURN_INNER_SPEED,
     GRASS_MIN_MOTOR_SPEED,
     MANUAL_TURN_SPEED_RATIO,
     MOTOR_LEFT_MTR_INDEX,
@@ -380,8 +381,8 @@ for _phase, _speed, _ramp in (
     PHASE_DRIVE_PROFILES[_phase] += (
         _profile(
             "edge_recovery",
-            "Image-edge recovery: outer wheel full duty, inner wheel stopped; W/S are diagnostic straight commands.",
-            _wasd_commands(_speed, CAMERA_EDGE_TURN_SPEED, 0.0, _ramp),
+            "Image-edge recovery: moderated forward arc; W/S are diagnostic straight commands.",
+            _wasd_commands(_speed, CAMERA_EDGE_TURN_SPEED, CAMERA_EDGE_TURN_INNER_SPEED, _ramp),
         ),
     )
 

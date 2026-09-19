@@ -8,6 +8,12 @@ from mission.const import (
     CAMERA_EDGE_TURN_ERROR,
     CAMERA_EDGE_TURN_RELEASE_ERROR,
     CAMERA_EDGE_TURN_SPEED,
+    CAMERA_EDGE_TURN_INNER_SPEED,
+    CAMERA_CONTROL_INITIAL_FRAME_SEC,
+    CAMERA_CONTROL_MIN_HOLD_SEC,
+    CAMERA_CONTROL_MAX_HOLD_SEC,
+    CAMERA_CONTROL_HOLD_FACTOR,
+    CAMERA_CONTROL_PERIOD_ALPHA,
     CONE_CENTER_POSITION,
     CAMERA_TINY_MIN_CONSISTENT_FRAMES,
     CAMERA_TINY_OCCUPANCY_THRESHOLD,
@@ -506,6 +512,7 @@ class MotorManager:
         return nav_heading, heading_source, diff
 
     def _reset_phase45_camera_track(self):
+        self.camera_control_frames = {}
         self.phase45_edge_turn_side = None
         self.phase45_filtered_cone_dir = None
         self.phase45_filtered_cone_seq = None
@@ -567,8 +574,35 @@ class MotorManager:
         )
         return True
 
+    def _camera_control_frame_ready(self, snapshot, now, phase):
+        """Issue one command per frame and stop if the next image is late.
+
+        Use camera observation timestamps to follow the actual frame cadence.
+        The fast motor loop remains available for stale-frame and shutdown stops.
+        """
+        sequence = int(snapshot["cone_sequence"])
+        updated_at = float(snapshot["cone_updated_at"])
+        frames = getattr(self, "camera_control_frames", {})
+        previous = frames.get(phase)
+        period = previous[2] if previous else CAMERA_CONTROL_INITIAL_FRAME_SEC
+        is_new = previous is None or sequence > previous[0]
+        if is_new and previous and updated_at > previous[1]:
+            measured = min(CAMERA_CONTROL_MAX_HOLD_SEC, updated_at - previous[1])
+            period += CAMERA_CONTROL_PERIOD_ALPHA * (measured - period)
+        hold = max(
+            CAMERA_CONTROL_MIN_HOLD_SEC,
+            min(CAMERA_CONTROL_MAX_HOLD_SEC, period * CAMERA_CONTROL_HOLD_FACTOR),
+        )
+        if is_new:
+            frames[phase] = (sequence, updated_at, period)
+            self.camera_control_frames = frames
+        if now - updated_at >= hold:
+            self.stop_motors()
+            return False
+        return is_new
+
     def _drive_camera_edge_turn(self, error, command_prefix, ramp_time):
-        """Recover image margin when a powered-inner-wheel arc is saturated."""
+        """Recover image margin with a moderated, both-wheels-forward arc."""
         side = "right" if error > 0 else "left"
         threshold = (
             CAMERA_EDGE_TURN_RELEASE_ERROR
@@ -580,7 +614,7 @@ class MotorManager:
             return False
         self.phase45_edge_turn_side = side
         self._set_forward_pivot_turn(
-            side, CAMERA_EDGE_TURN_SPEED, speed_inner=0.0,
+            side, CAMERA_EDGE_TURN_SPEED, speed_inner=CAMERA_EDGE_TURN_INNER_SPEED,
             ramp_time=ramp_time, cmd_type=f"{command_prefix}_edge_{side}",
         )
         return True
@@ -874,6 +908,8 @@ class MotorManager:
         if evaluate_cone_candidate(snapshot)["close_reached"]:
             self.stop_motors()
             return
+        if not self._camera_control_frame_ready(snapshot, now, 4):
+            return
         self._phase4_new_snapshot_candidate(snapshot, now)
         state = getattr(self, "phase4_search_state", "drive")
         candidate = self._phase4_motor_candidate(snapshot)
@@ -940,6 +976,8 @@ class MotorManager:
         close_reached = evaluate_cone_candidate(snapshot)["close_reached"]
         if close_reached and cone_centered_for_final_ram(snapshot):
             self.stop_motors()
+            return
+        if not self._camera_control_frame_ready(snapshot, now, 5):
             return
         cone_seen = self._phase45_cone_seen(
             snapshot,
