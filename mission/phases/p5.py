@@ -11,6 +11,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from mission.const import (
     CAMERA_DEAD_TIMEOUT,
+    GOAL_MAX_DISTANCE_SPREAD_CM,
+    GOAL_OBSERVATION_TIMEOUT_SEC,
     CAMERA_FRAME_STALE_STOP_SEC,
     CAMERA_PHASE5_MAX_ATTEMPTS,
     CONE_PHASE5_REACH_CONFIRM_FRAMES,
@@ -23,10 +25,11 @@ from mission.const import (
     GPS_PHASE45_MAX_DISTANCE,
     LED_INTERVAL_PHASE5,
     Phase,
-    PHASE5_RAM_CENTER_TOLERANCE,
+    GOAL_CENTER_TOLERANCE,
     TIMEOUT_PHASE_5,
 )
-from mission.cone_candidate import camera_has_visible_cone, cone_centered_for_final_ram, evaluate_cone_candidate
+from mission.cone_candidate import camera_has_visible_cone, cone_centered_for_final_approach, evaluate_cone_candidate
+from mission.goal import goal_evidence
 from mission.nav import calc_distance_and_azimuth
 from mission.phases.base import BasePhaseHandler
 
@@ -73,13 +76,16 @@ class Phase5Handler(BasePhaseHandler):
             controller.time_camera_start = time.time()
             controller.count_cone_lost = 0
             controller.phase5_reach_confirm_count = 0
+            controller.phase5_last_sonar_seq = 0
+            controller.phase5_goal_distance = None
+            controller.phase5_goal_wait_since = None
             controller.phase5_last_processed_cone_seq = 0
             controller.camera_phase5_attempts += 1
             controller.camera_phase5_start = controller.time_camera_start
         controller.cone_phase_decision = "p5_precheck"
         controller.cone_phase_threshold = float(CONE_PROBABILITY_THRESHOLD_PHASE5)
         controller.cone_phase_reached_probability_threshold = 0.0
-        controller.cone_phase_center_tolerance = float(PHASE5_RAM_CENTER_TOLERANCE)
+        controller.cone_phase_center_tolerance = float(GOAL_CENTER_TOLERANCE)
         controller.cone_phase_direction_tolerance = 0.0
         controller.cone_phase_required_confirm_frames = int(CONE_PHASE5_REACH_CONFIRM_FRAMES)
         controller.cone_phase_detected = False
@@ -132,11 +138,27 @@ class Phase5Handler(BasePhaseHandler):
         now = time.time()
         camera_fresh, cone_sequence = self._fresh_camera_frame(current_snapshot, now)
         evidence = evaluate_cone_candidate(current_snapshot)
-        centered = cone_centered_for_final_ram(current_snapshot)
+        centered = cone_centered_for_final_approach(current_snapshot)
         controller.cone_phase_centered = bool(camera_fresh and centered)
-        is_reach_effective = bool(
-            camera_fresh and evidence["close_reached"] and centered
+        is_reach_effective, goal_reason, goal_distance = goal_evidence(
+            current_snapshot, now, time.monotonic()
         )
+        controller.goal_decision = goal_reason
+        controller.goal_confirm_count = int(getattr(controller, "phase5_reach_confirm_count", 0))
+        # Visual near evidence may stop the vehicle while range is unavailable,
+        # but never authorizes a blind push or an unbounded wait.
+        if camera_fresh and evidence["close_reached"] and not is_reach_effective:
+            if getattr(controller, "phase5_goal_wait_since", None) is None:
+                controller.phase5_goal_wait_since = time.monotonic()
+            if time.monotonic() - controller.phase5_goal_wait_since >= GOAL_OBSERVATION_TIMEOUT_SEC:
+                controller.transition_to_give_up("GOAL_RANGE_UNCONFIRMED")
+                return
+        else:
+            controller.phase5_goal_wait_since = None
+        if not is_reach_effective:
+            controller.phase5_reach_confirm_count = 0
+            controller.phase5_goal_distance = None
+            controller.goal_confirm_count = 0
         weak_detect = bool(camera_fresh and evidence["weak"])
         is_det = (
             camera_fresh
@@ -183,7 +205,7 @@ class Phase5Handler(BasePhaseHandler):
                 "p5_tracking_weak" if weak_detect else "p5_tracking"
             )
             if evidence["close_reached"] and not centered:
-                controller.cone_phase_decision = "p5_align_before_ram"
+                controller.cone_phase_decision = "p5_align_before_approach"
             controller.count_cone_lost = 0
 
         if controller.count_cone_lost >= CONE_LOST_COUNT_LIMIT:
@@ -194,16 +216,28 @@ class Phase5Handler(BasePhaseHandler):
             return
 
         if is_reach_effective:
+            sonar_sequence = int(current_snapshot["sonar_sequence"])
+            if sonar_sequence == getattr(controller, "phase5_last_sonar_seq", 0):
+                controller.goal_decision = "wait_new_sonar"
+                return
+            controller.phase5_last_sonar_seq = sonar_sequence
+            previous_distance = getattr(controller, "phase5_goal_distance", None)
+            if previous_distance is not None and abs(goal_distance - previous_distance) > GOAL_MAX_DISTANCE_SPREAD_CM:
+                controller.phase5_reach_confirm_count = 0
+            controller.phase5_goal_distance = goal_distance
             controller.phase5_reach_confirm_count = getattr(controller, "phase5_reach_confirm_count", 0) + 1
             controller.cone_phase_confirm_count = int(controller.phase5_reach_confirm_count)
+            controller.goal_confirm_count = controller.phase5_reach_confirm_count
             controller.cone_phase_decision = "p5_reached_confirm"
             if controller.phase5_reach_confirm_count < CONE_PHASE5_REACH_CONFIRM_FRAMES:
                 return
             controller.cone_phase_decision = "p5_reached_to_p6"
             print(
-                f"Reached Cone! (Visual confirmation x{controller.phase5_reach_confirm_count})"
+                f"Final approach ready (camera/range confirmation x{controller.phase5_reach_confirm_count})"
             )
-            controller.mission_end_reason = "GOAL_REACHED"
+            controller.goal_decision = "final_approach_ready"
+            controller.phase6_motion_until = 0.0
+            controller.stop_motors()
             controller.st.update_navigation(phase=int(Phase.PHASE6))
             return
         else:

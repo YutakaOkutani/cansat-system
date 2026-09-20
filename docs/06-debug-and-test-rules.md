@@ -46,7 +46,7 @@ Do not replace this with a page of per-file commands. Select targeted modules fr
 | Phase 0 | `p0_detect.py` |
 | Phase 2 or budgets | `phase2_flow.py`, `phase3_heading.py` |
 | Navigation/arrival | `navigation_flow.py`, `phase3_heading.py` |
-| Sonar/obstacle input | `sonar_diag.py`, `sonar_freshness.py` |
+| Sonar/goal proximity | `sonar_diag.py`, `sonar_driver.py`, `sonar_freshness.py`, `goal_approach.py`, `phase6_flow.py` |
 | Motor mapping/diagnostic | `motor_diag_safety.py`, `phase3_heading.py` |
 
 Add a new focused spec when no row owns the changed boundary.
@@ -72,7 +72,7 @@ Add a new focused spec when no row owns the changed boundary.
 | Rover drives wrong direction | logical command, `motor_map.py`, direction/trim specs | Swap pins in a Phase |
 | GPS oscillation | fix quality, sequence, baseline, heading source/trust, BNO offset | Use raw coordinates without validity |
 | Frozen or jumping heading | BNO stale/recovery fields, GPS alignment, motor command | Re-enable raw magnetometer fallback |
-| False obstacle | `SonarValid`, stale age, consecutive confirmation | Treat held distance as fresh |
+| False goal proximity | camera/range alignment, `SonarSeq`, observation timestamps, stopped confirmation count | Treat a cached range or a grass reflection as cone contact |
 | Cone false positive/loss | probability, method, direction consistency, saved frames | Tune multiple ROI/threshold variables together |
 | Missing/shifted CSV fields | header/row length spec, producer, analysis coverage | Patch only the parser |
 | Wi-Fi remains off | radio event, restore deadline, shutdown path | Depend on SSH as the only recovery |

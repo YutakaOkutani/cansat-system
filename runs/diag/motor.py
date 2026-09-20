@@ -51,9 +51,9 @@ from mission.const import (
     PHASE5_NEAR_SPEED,
     PHASE5_MOTOR_RAMP_TIME,
     PHASE5_TURN_CLAMP,
-    PHASE6_RAM_RAMP_TIME,
-    PHASE6_RAM_DURATION_SEC,
-    PHASE6_RAM_SPEED,
+    PHASE6_APPROACH_RAMP_TIME,
+    GOAL_PULSE_SEC,
+    PHASE6_APPROACH_SPEED,
     PIN_EN1,
     PIN_EN2,
     PIN_PH1,
@@ -352,12 +352,12 @@ PHASE_DRIVE_PROFILES = {
     ),
     "6": (
         _profile(
-            "final_ram",
-            f"P6 final straight ram (production: {PHASE6_RAM_DURATION_SEC:.1f}s; "
+            "final_approach",
+            f"P6 range approach (production pulse: {GOAL_PULSE_SEC:.1f}s; "
             "diagnostic: runs until stop); A/D are diagnostic turns.",
             _straight_only_commands(
-                PHASE6_RAM_SPEED,
-                PHASE6_RAM_RAMP_TIME,
+                PHASE6_APPROACH_SPEED,
+                PHASE6_APPROACH_RAMP_TIME,
                 minimum_turn_speed=GRASS_MIN_MOTOR_SPEED,
             ),
         ),

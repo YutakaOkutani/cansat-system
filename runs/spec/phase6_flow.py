@@ -3,112 +3,131 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from mission.const import (
-    PHASE6_RAM_DURATION_SEC,
-    PHASE6_RAM_RAMP_TIME,
-    PHASE6_RAM_SPEED,
-    Phase,
-)
+from mission.const import GOAL_STOP_DISTANCE_CM, PHASE6_APPROACH_TIMEOUT_SEC, Phase
 from mission.phases.p6 import Phase6Handler
 from mission.st import CanSatState
 
 
-class _Phase6Controller:
+class Controller:
     def __init__(self):
         self.devices = {}
         self.st = CanSatState()
         self.st.update_navigation(phase=int(Phase.PHASE6))
         self.phase_entry_time = 1.0
-        self.phase6_entry_marker = None
-        self.phase6_start_time = None
+        self.mission_end_reason = 'RUNNING'
         self.mission_total_timeout_triggered = False
-        self.mission_end_reason = "GOAL_REACHED"
-        self.motor_commands = []
-
-    def set_motors(self, *args, **kwargs):
-        self.motor_commands.append((args, kwargs))
+        self.stop_calls = 0
 
     def stop_motors(self):
-        self.motor_commands.append(
-            ((0.0, True, 0.0, True), {"cmd_type": "stop"})
-        )
+        self.stop_calls += 1
+
+    def observe(self, now, distance=5.0, direction=0.5, reached=True):
+        self.st.update_cone(cone_direction=direction, cone_image_direction=direction, cone_probability=0.8,
+                            cone_is_reached=reached, cone_valid=True,
+                            cone_debug={'strict_red_ok': 1, 'occupancy': 0.1},
+                            observation_time=now, observation_accepted=True)
+        self.st.update_sonar(sonar_distance_cm=distance, sonar_valid=True,
+                             sonar_sequence=self.st.snapshot()['cone_sequence'],
+                             sonar_observed_at=now, sonar_observed_monotonic=now)
+
+
+def execute(controller, now):
+    with patch('mission.phases.p6.time.time', return_value=now), patch('mission.phases.p6.time.monotonic', return_value=now):
+        Phase6Handler().execute(controller, controller.st.snapshot())
 
 
 class Phase6FlowTest(unittest.TestCase):
-    def test_final_ram_duration_is_full_goal_push(self):
-        self.assertEqual(PHASE6_RAM_DURATION_SEC, 5.0)
-        self.assertEqual(PHASE6_RAM_SPEED, 75)
+    def test_stopped_new_observations_confirm_proximity_not_contact(self):
+        ctrl = Controller()
+        ctrl.observe(100)
+        execute(ctrl, 100)
+        self.assertEqual(ctrl.mission_end_reason, 'RUNNING')
+        for now in (100.4, 100.6):
+            ctrl.observe(now)
+            execute(ctrl, now)
+            self.assertEqual(ctrl.mission_end_reason, 'RUNNING')
+        ctrl.observe(100.8)
+        execute(ctrl, 100.8)
+        self.assertEqual(ctrl.mission_end_reason, 'GOAL_PROXIMITY_CONFIRMED')
+        self.assertEqual(ctrl.st.snapshot()['phase'], int(Phase.PHASE7))
+        self.assertEqual(ctrl.phase6_motion_until, 0)
 
-    def test_ram_continues_past_previous_deadline(self):
-        controller = _Phase6Controller()
-        handler = Phase6Handler()
-        for now in (100.0, 103.0, 104.9):
-            with patch("mission.phases.p6.time.time", return_value=now):
-                handler.execute(controller, controller.st.snapshot())
-            self.assertEqual(controller.st.snapshot()["phase"], int(Phase.PHASE6))
-            self.assertEqual(controller.motor_commands[-1][1]["cmd_type"], "phase6_final_ram")
+    def test_repeated_frame_or_echo_cannot_confirm(self):
+        ctrl = Controller()
+        ctrl.observe(100)
+        execute(ctrl, 100)
+        ctrl.observe(100.4)
+        execute(ctrl, 100.4)
+        for now in (100.41, 100.42, 100.43):
+            execute(ctrl, now)
+        self.assertEqual(ctrl.goal_confirm_count, 1)
+        self.assertEqual(ctrl.mission_end_reason, 'RUNNING')
 
-    def test_total_timeout_stops_ram_immediately(self):
-        controller = _Phase6Controller()
-        handler = Phase6Handler()
-        with patch("mission.phases.p6.time.time", return_value=100.0):
-            handler.execute(controller, controller.st.snapshot())
-        controller.mission_total_timeout_triggered = True
-        with patch("mission.phases.p6.time.time", return_value=101.0):
-            handler.execute(controller, controller.st.snapshot())
-        self.assertEqual(controller.motor_commands[-1][1]["cmd_type"], "stop")
-        self.assertEqual(controller.st.snapshot()["phase"], int(Phase.PHASE7))
+    def test_far_range_authorizes_only_a_bounded_pulse(self):
+        ctrl = Controller()
+        ctrl.observe(100, distance=30)
+        execute(ctrl, 100)
+        ctrl.observe(100.4, distance=30)
+        execute(ctrl, 100.4)
+        self.assertGreater(ctrl.phase6_motion_until, 100.4)
+        self.assertLess(ctrl.phase6_motion_until, 100.6)
+        ctrl.observe(100.6, distance=28)
+        execute(ctrl, 100.6)
+        self.assertEqual(ctrl.phase6_motion_until, 0)
+        self.assertEqual(ctrl.mission_end_reason, 'RUNNING')
 
-    def test_cone_loss_during_final_ram_never_falls_back(self):
-        controller = _Phase6Controller()
-        handler = Phase6Handler()
+    def test_close_range_interrupts_pulse_and_waits_for_stopped_samples(self):
+        ctrl = Controller()
+        ctrl.observe(100, distance=30)
+        execute(ctrl, 100)
+        ctrl.observe(100.4, distance=30)
+        execute(ctrl, 100.4)
+        ctrl.observe(100.45, distance=GOAL_STOP_DISTANCE_CM)
+        execute(ctrl, 100.45)
+        self.assertEqual(ctrl.phase6_motion_until, 0)
+        self.assertEqual(ctrl.goal_confirm_count, 0)
 
-        with patch("mission.phases.p6.time.time", return_value=100.0):
-            handler.execute(controller, controller.st.snapshot())
+    def test_missing_stale_off_axis_or_blind_zone_stops(self):
+        for case in ('missing', 'stale', 'off_axis', 'blind_zone'):
+            with self.subTest(case=case):
+                ctrl = Controller()
+                ctrl.observe(100, distance=30)
+                execute(ctrl, 100)
+                ctrl.observe(100.4, distance=30)
+                execute(ctrl, 100.4)
+                if case == 'missing':
+                    ctrl.st.update_sonar(sonar_valid=False)
+                elif case == 'off_axis':
+                    ctrl.observe(100.5, direction=0.8)
+                elif case == 'blind_zone':
+                    ctrl.observe(100.5, distance=0.5)
+                execute(ctrl, 101 if case == 'stale' else 100.5)
+                self.assertEqual(ctrl.phase6_motion_until, 0)
+                self.assertEqual(ctrl.goal_confirm_count, 0)
+                execute(ctrl, 104)
+                self.assertEqual(ctrl.mission_end_reason, 'GOAL_OBSERVATION_LOST')
 
-        controller.st.update_cone(
-            cone_probability=0.0,
-            cone_is_reached=False,
-            cone_valid=True,
-            cone_status="ok",
-            observation_time=101.0,
-            observation_accepted=True,
-        )
-        with patch("mission.phases.p6.time.time", return_value=101.0):
-            handler.execute(controller, controller.st.snapshot())
+    def test_timeout_is_not_success(self):
+        for global_timeout in (False, True):
+            ctrl = Controller()
+            ctrl.observe(100)
+            execute(ctrl, 100)
+            ctrl.mission_total_timeout_triggered = global_timeout
+            execute(ctrl, 100 + PHASE6_APPROACH_TIMEOUT_SEC)
+            self.assertEqual(ctrl.mission_end_reason, 'MISSION_TOTAL_TIMEOUT' if global_timeout else 'GOAL_APPROACH_TIMEOUT')
+            self.assertEqual(ctrl.phase6_motion_until, 0)
 
-        self.assertEqual(controller.st.snapshot()["phase"], int(Phase.PHASE6))
-        self.assertEqual(
-            controller.motor_commands[-1][1]["cmd_type"],
-            "phase6_final_ram",
-        )
-
-    def test_final_ram_stops_before_transitioning_to_phase7(self):
-        controller = _Phase6Controller()
-        handler = Phase6Handler()
-
-        with patch("mission.phases.p6.time.time", return_value=100.0):
-            handler.execute(controller, controller.st.snapshot())
-
-        args, kwargs = controller.motor_commands[-1]
-        self.assertEqual((args[0], args[2]), (PHASE6_RAM_SPEED, PHASE6_RAM_SPEED))
-        self.assertEqual(kwargs["ramp_time"], PHASE6_RAM_RAMP_TIME)
-        self.assertEqual(controller.st.snapshot()["phase"], int(Phase.PHASE6))
-
-        with patch(
-            "mission.phases.p6.time.time",
-            return_value=100.0 + PHASE6_RAM_DURATION_SEC,
-        ):
-            handler.execute(controller, controller.st.snapshot())
-
-        self.assertEqual(controller.motor_commands[-1][1]["cmd_type"], "stop")
-        self.assertEqual(controller.st.snapshot()["phase"], int(Phase.PHASE7))
+    def test_old_before_stop_frame_is_not_confirmation(self):
+        ctrl = Controller()
+        ctrl.observe(100)
+        execute(ctrl, 100)
+        execute(ctrl, 100.4)
+        self.assertEqual(ctrl.goal_confirm_count, 0)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

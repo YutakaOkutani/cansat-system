@@ -47,7 +47,7 @@ from mission.const import (
     CONE_CENTER_POSITION,
     DATA_SAMPLING_RATE,
     DEFAULT_BNO_CALIB,
-    DEFAULT_OBSTACLE_DIST_CM,
+    DEFAULT_SONAR_DIST_CM,
     DEVICE_BMP,
     DEVICE_BNO,
     DEVICE_DETECTOR,
@@ -74,6 +74,7 @@ from mission.const import (
     PHASES_CAMERA_ACTIVE,
     Phase,
     SONAR_MAX_DISTANCE,
+    SONAR_MIN_DISTANCE_CM,
     SONAR_STALE_TIMEOUT_SEC,
 )
 from mission.gps_util import coerce_gga_metrics, gga_quality_ok, open_gps_serial, parse_gga_sentence
@@ -280,9 +281,13 @@ class SensorManager:
             self._coerce_int(getattr(self, "camera_reinit_attempt_count", 0)),
             f"{camera_recovery_elapsed_sec:.2f}",
             self._coerce_int(bool(getattr(self, "camera_recovery_exhausted", False))),
-            f"{self._coerce_float(current_data.get('obstacle_dist', 0.0)):.2f}",
-            self._coerce_int(bool(current_data.get("obstacle_valid", False))),
-            f"{self._coerce_float(current_data.get('obstacle_stale_sec', 0.0)):.2f}",
+            f"{self._coerce_float(current_data.get('sonar_distance_cm', 0.0)):.2f}",
+            self._coerce_int(bool(current_data.get("sonar_valid", False))),
+            f"{self._coerce_float(current_data.get('sonar_stale_sec', 0.0)):.2f}",
+            self._coerce_int(current_data.get("sonar_sequence", 0)),
+            f"{self._coerce_float(current_data.get('sonar_observed_at', 0.0)):.3f}",
+            str(getattr(self, "goal_decision", "inactive")),
+            self._coerce_int(getattr(self, "goal_confirm_count", 0)),
             self._coerce_int(bool(current_data.get("angle_valid", False))),
             f"{bno_stale_sec:.2f}",
             self._coerce_int(bool(getattr(self, "bno_heading_recovery_active", False))),
@@ -786,49 +791,28 @@ class SensorManager:
             return None
 
     def get_sonar_data(self):
-        sonar_instance = self.devices.get(DEVICE_SONAR)
-        if sonar_instance is None:
-            return None
-        try:
-            dist_m = sonar_instance.distance
-            if dist_m is not None and 0 < dist_m < SONAR_MAX_DISTANCE:
-                return dist_m * 100.0
-        except Exception:
-            pass
-        return None
+        sensor = self.devices.get(DEVICE_SONAR)
+        return sensor.read_sample() if sensor is not None else None
 
-    def _update_sonar_state(self, sonar_dist, now=None):
+    def _update_sonar_state(self, sample, now=None):
         now = time.monotonic() if now is None else float(now)
-        try:
-            distance_cm = float(sonar_dist)
-        except (TypeError, ValueError):
-            distance_cm = None
-        valid_sample = (
-            distance_cm is not None
-            and math.isfinite(distance_cm)
-            and 0.0 < distance_cm < float(SONAR_MAX_DISTANCE) * 100.0
+        distance = sample.distance_cm if sample is not None else None
+        age = max(0.0, now - sample.observed_monotonic) if sample is not None else SONAR_STALE_TIMEOUT_SEC + 1.0
+        valid = bool(
+            sample is not None and sample.sequence > 0
+            and sample.observed_monotonic <= now
+            and distance is not None and math.isfinite(distance)
+            and SONAR_MIN_DISTANCE_CM <= distance < SONAR_MAX_DISTANCE * 100.0
+            and age < SONAR_STALE_TIMEOUT_SEC
         )
-        if valid_sample:
-            self.sonar_last_valid_monotonic = now
-            self.st.update_obstacle(
-                obstacle_dist=distance_cm,
-                obstacle_valid=True,
-                obstacle_stale_sec=0.0,
-            )
-            return True
-
-        last_valid_raw = getattr(self, "sonar_last_valid_monotonic", None)
-        last_valid = float(last_valid_raw) if last_valid_raw is not None else None
-        stale_sec = max(0.0, now - last_valid) if last_valid is not None else SONAR_STALE_TIMEOUT_SEC + 1.0
-        if last_valid is None or stale_sec >= float(SONAR_STALE_TIMEOUT_SEC):
-            self.st.update_obstacle(
-                obstacle_dist=DEFAULT_OBSTACLE_DIST_CM,
-                obstacle_valid=False,
-                obstacle_stale_sec=stale_sec,
-            )
-        else:
-            self.st.update_obstacle(obstacle_stale_sec=stale_sec)
-        return False
+        self.st.update_sonar(
+            sonar_distance_cm=distance if valid else DEFAULT_SONAR_DIST_CM,
+            sonar_valid=valid, sonar_stale_sec=age,
+            sonar_sequence=sample.sequence if sample is not None else 0,
+            sonar_observed_at=sample.observed_at if sample is not None else 0.0,
+            sonar_observed_monotonic=sample.observed_monotonic if sample is not None else 0.0,
+        )
+        return valid
 
     def cone_detect(self):
         detector = self.devices.get(DEVICE_DETECTOR)
@@ -1160,7 +1144,7 @@ class SensorManager:
                 time.sleep(CAMERA_IDLE_SLEEP)
 
     def _sync_camera_runtime_for_phase(self, phase):
-        """Keep camera hardware completely inactive outside P4/P5."""
+        """Keep camera hardware completely inactive outside P4/P5/P6."""
         try:
             phase_enum = Phase(phase)
         except (TypeError, ValueError):

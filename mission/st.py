@@ -6,7 +6,7 @@ from lib.cone_diagnostics import normalize_cone_diagnostics
 from mission.const import (
     CONE_CENTER_POSITION,
     DEFAULT_FLOAT_VALUE,
-    DEFAULT_OBSTACLE_DIST_CM,
+    DEFAULT_SONAR_DIST_CM,
     DEFAULT_PHASE,
     DEFAULT_VECTOR3,
     SONAR_STALE_TIMEOUT_SEC,
@@ -58,9 +58,12 @@ class CanSatState:
         self.cone_updated_at = 0.0
         self.cone_last_valid_at = 0.0
         self.cone_debug = normalize_cone_diagnostics()
-        self.obstacle_dist = DEFAULT_OBSTACLE_DIST_CM
-        self.obstacle_valid = False
-        self.obstacle_stale_sec = SONAR_STALE_TIMEOUT_SEC + 1.0
+        self.sonar_distance_cm = DEFAULT_SONAR_DIST_CM
+        self.sonar_sequence = 0
+        self.sonar_observed_at = 0.0
+        self.sonar_observed_monotonic = 0.0
+        self.sonar_valid = False
+        self.sonar_stale_sec = SONAR_STALE_TIMEOUT_SEC + 1.0
         self.phase = DEFAULT_PHASE
         self.gps_detect = 0
         self.cone_is_reached = False
@@ -232,14 +235,21 @@ class CanSatState:
                 )
             self.cone_debug = normalize_cone_diagnostics(diagnostics)
 
-    def update_obstacle(self, obstacle_dist=None, obstacle_valid=None, obstacle_stale_sec=None):
+    def update_sonar(self, sonar_distance_cm=None, sonar_valid=None, sonar_stale_sec=None,
+                     sonar_sequence=None, sonar_observed_at=None, sonar_observed_monotonic=None):
         with self.lock:
-            if obstacle_dist is not None:
-                self.obstacle_dist = obstacle_dist
-            if obstacle_valid is not None:
-                self.obstacle_valid = bool(obstacle_valid)
-            if obstacle_stale_sec is not None:
-                self.obstacle_stale_sec = float(obstacle_stale_sec)
+            if sonar_sequence is not None:
+                self.sonar_sequence = int(sonar_sequence)
+            if sonar_observed_at is not None:
+                self.sonar_observed_at = float(sonar_observed_at)
+            if sonar_observed_monotonic is not None:
+                self.sonar_observed_monotonic = float(sonar_observed_monotonic)
+            if sonar_distance_cm is not None:
+                self.sonar_distance_cm = sonar_distance_cm
+            if sonar_valid is not None:
+                self.sonar_valid = bool(sonar_valid)
+            if sonar_stale_sec is not None:
+                self.sonar_stale_sec = float(sonar_stale_sec)
 
     def snapshot(self):
         with self.lock:
@@ -286,9 +296,12 @@ class CanSatState:
                 "cone_updated_at": self.cone_updated_at,
                 "cone_last_valid_at": self.cone_last_valid_at,
                 "cone_debug": dict(self.cone_debug),
-                "obstacle_dist": self.obstacle_dist,
-                "obstacle_valid": self.obstacle_valid,
-                "obstacle_stale_sec": self.obstacle_stale_sec,
+                "sonar_sequence": self.sonar_sequence,
+                "sonar_observed_at": self.sonar_observed_at,
+                "sonar_observed_monotonic": self.sonar_observed_monotonic,
+                "sonar_distance_cm": self.sonar_distance_cm,
+                "sonar_valid": self.sonar_valid,
+                "sonar_stale_sec": self.sonar_stale_sec,
                 "phase": self.phase,
                 "gps_detect": self.gps_detect,
                 "cone_is_reached": self.cone_is_reached,

@@ -33,8 +33,8 @@ Current numeric thresholds, pins, speeds, and budgets are authoritative in `miss
 | P2 escape/calibration/alignment | Escape parachute, calibrate, learn GPS/BNO offset from a straight stable segment, confirm heading readiness | P3 when heading is ready; P4 if GPS arrival was already confirmed | Bounded reorientation/retry; best-effort/fallback offset; controller timeout | stage/mode, calibration, progress, reject reason, offset validity |
 | P3 GPS navigation | Compute distance/azimuth from valid GPS; prefer GPS-aligned BNO for high-rate steering; confirm arrival over samples/time | P4 on confirmed arrival | P4 on local/cumulative timeout; continue conservatively when heading is unavailable | GPS quality/sequence, heading source/trust, arrival latch |
 | P4 visual search/alignment | Search on a forward arc; steer immediately toward a credible candidate and confirm distinct frames | P5 only on confirmed detection | P3 on GPS disagreement only without a visible cone; P7 on timeout without a visible cone or exhausted camera recovery | probability, method/direction, confirmation count, camera health/reinit attempts |
-| P5 visual approach | Approach using visual steering; confirm reached over multiple frames | P6 with `GOAL_REACHED` | P4 after bounded loss; P3 when far/camera dead without a visible cone; P7 on timeout without a visible cone | entry reason, loss/reach counts, timeout, command |
-| P6 final ram | Apply short bounded forward command only when not globally timed out | P7 after duration | Immediate P7 on total-timeout state | mission end reason, duration, command |
+| P5 visual approach | Approach using visual steering; confirm aligned camera/range pairs | P6 without declaring success | P4 after bounded loss; P3 when far/camera dead without a visible cone; P7 on timeout without a visible cone | entry reason, loss/reach counts, timeout, command |
+| P6 range approach | Alternate bounded forward pulses and stopped observations; keep camera active | P7 with `GOAL_PROXIMITY_CONFIRMED` after distinct stopped camera/range confirmations | Stop on invalid evidence; P7 on observation loss or bounded timeout | range sequence/time, goal decision/count, motor deadline, end reason |
 | P7 terminal | Stop motors, resolve arrival semantics, signal goal/give-up, request shutdown | Process exit | None | arrival reason, mission end reason, final row |
 
 ## Phase 2 invariants
@@ -62,23 +62,35 @@ Current numeric thresholds, pins, speeds, and budgets are authoritative in `miss
 - Require short-term consistency for P4 detection; a weak single frame must not transition.
 - A fresh visible cone overrides capture windows, local/cumulative P4/P5 timeouts, and GPS disagreement. Follow its current image position; resume search only after visual loss. The global mission deadline still stops the mission.
 - At the image edge, use a moderated both-wheels-forward arc with image-error hysteresis. Issue at most one motion command per new camera frame. Estimate the frame period from observation timestamps and stop when the next frame is late, bounded by the configured hold ceiling; keep stale-frame and global-stop checks responsive.
-- Keep the camera detector and capture pipeline inactive throughout P0-P3. Activate them only on entry to P4/P5, and release them whenever the mission returns to a non-vision phase; a camera disconnect before P4 must not affect navigation or motor control.
+- Keep the camera detector and capture pipeline inactive throughout P0-P3. Activate them in P4/P5/P6, and release them whenever the mission returns to a non-vision phase; a camera disconnect before P4 must not affect navigation or motor control.
 - Compensate P4 candidate direction with heading when available and reject discontinuous vertical position or scale before confirmation.
-- In P5, confirm close-range evidence only while the cone is centered for a straight final ram; reset confirmation when it leaves that window. Continue image-directed steering for an off-center close cone, using the latest image direction rather than a lagging filtered direction.
+- In P5, require distinct fresh aligned camera/range pairs to enter P6. Retain visual identity/quality gates, but do not require the old close-occupancy threshold. Stop while confirming matched pairs. Reset on mismatch and bound a visual-close wait with unavailable range.
 - Distinguish cone loss (`P5 -> P4`) from a P4 timeout or exhausted camera recovery (`P4 -> P7`).
 - In P4, allow at most three camera recreations at five-second intervals and require a valid captured frame before declaring recovery; retain at least a 15-second recovery window.
-- Without a visible cone, P4/P5 timeouts stop motors and skip final ram. Time alone must never authorize P6.
+- Without a visible cone, P4/P5 timeouts stop motors and skip final approach. Time alone must never authorize P6.
 - Do not let a camera failure create an unbounded search/approach loop.
 - Keep the legacy camera relay outside the production architecture.
 
+## Ranging and future obstacle perception
+
+- Remove all sonar-only obstacle avoidance from P2/P3/P4. A near echo does not establish an impassable obstacle or a stuck vehicle. Preserve heading-sensor health checks and unrelated navigation recovery.
+- Reserve future obstacle/stuck detection for image interpretation and fused evidence of range and actual progress; do not implement a speculative avoidance fallback.
+- Timestamp individual echo attempts before GPIO Zero smoothing. Failed attempts invalidate the range immediately; rereading an attempt never refreshes it. Attempt sequence includes failures; goal confirmation requires new valid observations from both sensors.
+- Keep distance/validity/time in shared sonar state. Put camera/range matching in `mission/goal.py`, decisions in Phase handlers, and deadline/freshness interlocks in MotorManager.
+- P6 stops on missing, stale, off-axis or incompatible observations. Reacquisition is stationary and bounded; do not silently resume the legacy timed ram.
+- Count proximity confirmations only from images and echoes acquired after stopping and settling. Never count motion-time or duplicate observations as stopped confirmations.
+- Sonar measures a reflector, not its identity. Central alignment and visual plausibility reduce but do not eliminate grass/cone association errors. Validate mounting and target geometry on hardware.
+- The active target is sensor-face proximity intended to bring the projecting vehicle front into contact. Thresholds and motion values live in `mission/const.py`; contact itself remains unverified without additional evidence.
+
 ## Timeout and terminal semantics
 
-- Derive the global timeout from cumulative Phase budgets, final-ram allowance, and transition margin.
+- Derive the global timeout from cumulative Phase budgets, final-approach allowance, and transition margin.
 - Preserve the minimum P3 navigation reserve when changing earlier budgets.
 - Accumulate P3/P4/P5 time across re-entry.
-- On global timeout, force safe terminal handling; do not perform the final ram.
-- `GOAL_REACHED` is verified visual completion.
-- `PHASE5_VISUAL_LOST_TIMEOUT` reports give-up without a visible cone. `PHASE5_TIMEOUT_FORCED_GOAL` remains a legacy-log reason; current P5 timeouts never authorize a ram.
+- On global timeout, force safe terminal handling; do not perform the final approach.
+- `GOAL_REACHED` is a legacy visual-completion reason. Current P6 emits `GOAL_PROXIMITY_CONFIRMED`, which confirms stopped proximity, not physical contact. The requested objective is contact; the sensor-to-front offset is estimated, not measured.
+- `GOAL_RANGE_UNCONFIRMED`, `GOAL_OBSERVATION_LOST`, and `GOAL_APPROACH_TIMEOUT` are non-success exits. Do not convert elapsed time into success.
+- `PHASE5_VISUAL_LOST_TIMEOUT` reports give-up without a visible cone. `PHASE5_TIMEOUT_FORCED_GOAL` remains a legacy-log reason; current P5 timeouts never authorize blind forward motion.
 - `MISSION_TOTAL_TIMEOUT` is give-up behavior.
 - Any new terminal reason must update log tests, Phase 7 resolution, and analysis interpretation.
 

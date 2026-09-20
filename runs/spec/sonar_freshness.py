@@ -8,7 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from mission.const import DEFAULT_OBSTACLE_DIST_CM, SONAR_STALE_TIMEOUT_SEC
+from mission.const import DEFAULT_SONAR_DIST_CM, SONAR_STALE_TIMEOUT_SEC
 from mission.st import CanSatState
 
 sys.modules.setdefault("serial", types.SimpleNamespace())
@@ -35,44 +35,36 @@ class _SonarController(sensor_module.SensorManager):
         self.st = CanSatState()
 
 
+from lib.sonar import SonarSample
+
+
 class SonarFreshnessTest(unittest.TestCase):
-    def test_recent_value_is_kept_only_within_stale_window(self):
+    def test_cached_sample_does_not_refresh_timestamp(self):
         ctrl = _SonarController()
-        self.assertTrue(ctrl._update_sonar_state(25.0, now=100.0))
-        self.assertFalse(ctrl._update_sonar_state(None, now=100.5))
+        sample = SonarSample(1, 25.0, 1000.0, 100.0)
+        self.assertTrue(ctrl._update_sonar_state(sample, now=100.0))
+        self.assertTrue(ctrl._update_sonar_state(sample, now=100.2))
+        self.assertFalse(ctrl._update_sonar_state(sample, now=100.5))
+        state = ctrl.st.snapshot()
+        self.assertFalse(state['sonar_valid'])
+        self.assertEqual(state['sonar_sequence'], 1)
+        self.assertEqual(state['sonar_observed_monotonic'], 100.0)
 
-        snapshot = ctrl.st.snapshot()
-        self.assertTrue(snapshot["obstacle_valid"])
-        self.assertEqual(snapshot["obstacle_dist"], 25.0)
-        self.assertEqual(snapshot["obstacle_stale_sec"], 0.5)
-
-    def test_stale_value_is_invalidated_and_replaced(self):
+    def test_no_echo_invalidates_immediately_and_recovers(self):
         ctrl = _SonarController()
-        ctrl._update_sonar_state(18.0, now=100.0)
-        ctrl._update_sonar_state(None, now=100.0 + SONAR_STALE_TIMEOUT_SEC)
+        ctrl._update_sonar_state(SonarSample(1, 25.0, 1000.0, 100.0), now=100.0)
+        self.assertFalse(ctrl._update_sonar_state(SonarSample(2, None, 1000.1, 100.1), now=100.1))
+        self.assertFalse(ctrl.st.snapshot()['sonar_valid'])
+        self.assertTrue(ctrl._update_sonar_state(SonarSample(3, 5.0, 1000.2, 100.2), now=100.2))
 
-        snapshot = ctrl.st.snapshot()
-        self.assertFalse(snapshot["obstacle_valid"])
-        self.assertEqual(snapshot["obstacle_dist"], DEFAULT_OBSTACLE_DIST_CM)
-        self.assertEqual(snapshot["obstacle_stale_sec"], SONAR_STALE_TIMEOUT_SEC)
-
-    def test_invalid_numeric_samples_do_not_become_obstacles(self):
+    def test_invalid_and_blind_zone_samples_are_rejected(self):
         ctrl = _SonarController()
-        for value in (float("nan"), float("inf"), -1.0, 0.0, 9999.0):
-            with self.subTest(value=value):
-                self.assertFalse(ctrl._update_sonar_state(value, now=10.0))
-                self.assertFalse(ctrl.st.snapshot()["obstacle_valid"])
-
-    def test_valid_sample_recovers_after_stale_period(self):
-        ctrl = _SonarController()
-        ctrl._update_sonar_state(None, now=10.0)
-        self.assertTrue(ctrl._update_sonar_state(42.0, now=20.0))
-
-        snapshot = ctrl.st.snapshot()
-        self.assertTrue(snapshot["obstacle_valid"])
-        self.assertEqual(snapshot["obstacle_dist"], 42.0)
-        self.assertEqual(snapshot["obstacle_stale_sec"], 0.0)
+        for distance in (None, float('nan'), float('inf'), -1, 0, 1, 400, 9999):
+            with self.subTest(distance=distance):
+                self.assertFalse(ctrl._update_sonar_state(SonarSample(1, distance, 1000, 100), now=100))
+        self.assertFalse(ctrl._update_sonar_state(None, now=100))
+        self.assertFalse(ctrl._update_sonar_state(SonarSample(1, 20, 1000, 101), now=100))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

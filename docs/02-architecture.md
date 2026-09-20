@@ -91,7 +91,7 @@ Existing direct `controller.devices` access in Phase handlers is legacy coupling
 
 - `HardwareManager`: initialize devices, initialize the CSV before workers, start workers, and leave unavailable devices explicit.
 - `SensorManager`: validate/normalize input, track stale/recovery state, update `CanSatState`, and serialize log rows.
-- `MotorManager`: own logical-to-physical mapping, ramps, clamping, obstacle behavior, phase-aware motion, and final stop.
+- `MotorManager`: own logical-to-physical mapping, ramps, clamping, phase-aware motion, final-approach deadline/freshness interlocks, and final stop. Sonar alone no longer triggers obstacle avoidance.
 - `LedManager`: own operational signals.
 - `RadioManager`: own `rfkill` invocation and restoration failsafe.
 

@@ -9,10 +9,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from mission.const import (
-    OBSTACLE_AVOID_DIST,
     PIN_ECHO,
     PIN_TRIG,
     SONAR_MAX_DISTANCE,
+    SONAR_MIN_DISTANCE_CM,
     SONAR_STALE_TIMEOUT_SEC,
 )
 
@@ -34,7 +34,7 @@ def _valid_distance_cm(distance_m):
         distance_m = float(distance_m)
     except (TypeError, ValueError):
         return None
-    if not math.isfinite(distance_m) or not 0.0 < distance_m < float(SONAR_MAX_DISTANCE):
+    if not math.isfinite(distance_m) or not SONAR_MIN_DISTANCE_CM / 100.0 <= distance_m < float(SONAR_MAX_DISTANCE):
         return None
     return distance_m * 100.0
 
@@ -44,7 +44,7 @@ def main():
     interval = max(0.05, float(args.interval))
     duration = max(0.0, float(args.duration))
 
-    from gpiozero import DistanceSensor
+    from lib.sonar import SonarSensor
     from gpiozero.pins.lgpio import LGPIOFactory
 
     print("Ultrasonic sensor diagnostic")
@@ -52,9 +52,10 @@ def main():
     print(f"  echo GPIO    : {PIN_ECHO}")
     print(f"  max distance : {SONAR_MAX_DISTANCE:.1f} m")
     print(f"  stale limit  : {SONAR_STALE_TIMEOUT_SEC:.1f} s")
-    print(f"  avoid limit  : {OBSTACLE_AVOID_DIST:.1f} cm")
-    print("CAUTION: standard HC-SR04 ECHO is 5 V; never connect it directly to Raspberry Pi GPIO.")
-    print("CAUTION: the current PCB has no level conversion; add an external divider or level shifter.")
+    print("Purpose: forward ranging / goal proximity; no automatic obstacle avoidance.")
+    print("Wiring: direct ECHO connection is supported when its output meets 3.3 V GPIO input limits.")
+    print("Wiring: for 5 V ECHO, use an external divider or level shifter; the current PCB has none.")
+    print("Check the module's output specification at its supply voltage; successful readings alone are not proof.")
     print("Place a flat object in front of the sensor and move it. Ctrl+C to exit.")
 
     pin_factory = None
@@ -62,13 +63,14 @@ def main():
     valid_count = 0
     invalid_count = 0
     consecutive_invalid = 0
+    last_sequence = 0
     last_valid_at = None
     last_valid_cm = None
     started_at = time.monotonic()
 
     try:
         pin_factory = LGPIOFactory()
-        sensor = DistanceSensor(
+        sensor = SonarSensor(
             echo=PIN_ECHO,
             trigger=PIN_TRIG,
             max_distance=SONAR_MAX_DISTANCE,
@@ -78,7 +80,16 @@ def main():
         while duration <= 0.0 or time.monotonic() - started_at < duration:
             now = time.monotonic()
             try:
-                distance_cm = _valid_distance_cm(sensor.distance)
+                sample = sensor.read_sample()
+                distance_cm = _valid_distance_cm(
+                    sample.distance_cm / 100.0 if sample.distance_cm is not None else None
+                )
+                if sample.sequence == last_sequence and now - sample.observed_monotonic < SONAR_STALE_TIMEOUT_SEC:
+                    time.sleep(interval)
+                    continue
+                last_sequence = sample.sequence
+                if not 0 <= now - sample.observed_monotonic < SONAR_STALE_TIMEOUT_SEC:
+                    distance_cm = None
             except Exception as exc:
                 distance_cm = None
                 error_detail = f"{type(exc).__name__}: {exc}"
@@ -91,19 +102,17 @@ def main():
                 consecutive_invalid = 0
                 last_valid_at = now
                 last_valid_cm = distance_cm
-                obstacle = distance_cm < float(OBSTACLE_AVOID_DIST)
                 print(
                     f"[{timestamp}] VALID distance={distance_cm:7.2f} cm "
-                    f"obstacle={int(obstacle)}"
+                    f"sequence={sample.sequence}"
                 )
             else:
                 invalid_count += 1
                 consecutive_invalid += 1
                 stale_sec = now - last_valid_at if last_valid_at is not None else float("inf")
-                production_valid = last_valid_at is not None and stale_sec < float(SONAR_STALE_TIMEOUT_SEC)
                 last_text = f"{last_valid_cm:.2f} cm" if last_valid_cm is not None else "none"
                 stale_text = f"{stale_sec:.2f}s" if math.isfinite(stale_sec) else "never"
-                state = "HOLD" if production_valid else "STALE"
+                state = "INVALID"
                 print(
                     f"[{timestamp}] {state} last={last_text} age={stale_text} "
                     f"failures={consecutive_invalid} ({error_detail})"

@@ -70,7 +70,7 @@ class LogSchemaTest(unittest.TestCase):
         self.assertEqual(len(row), len(LOG_HEADER))
         self.assertEqual(len(LOG_HEADER), len(set(LOG_HEADER)))
         by_name = dict(zip(LOG_HEADER, row))
-        self.assertEqual(by_name["LogSchemaVersion"], 1)
+        self.assertEqual(by_name["LogSchemaVersion"], 2)
         self.assertEqual(by_name["RunId"], "test-run")
 
     def test_cone_diagnostics_are_written_with_freshness_and_gate_context(self):
@@ -168,18 +168,22 @@ class LogSchemaTest(unittest.TestCase):
 
     def test_sonar_freshness_columns_are_written_to_log_row(self):
         ctrl = _LogOnlyController()
-        ctrl.st.update_obstacle(
-            obstacle_dist=24.5,
-            obstacle_valid=True,
-            obstacle_stale_sec=0.4,
+        ctrl.st.update_sonar(
+            sonar_distance_cm=24.5,
+            sonar_valid=True,
+            sonar_stale_sec=0.4,
+            sonar_sequence=17, sonar_observed_at=1234.5,
         )
 
         row = ctrl._build_log_row()
         by_name = dict(zip(LOG_HEADER, row))
 
-        self.assertEqual(by_name["ObstacleDist"], "24.50")
+        self.assertEqual(by_name["SonarDistanceCm"], "24.50")
         self.assertEqual(by_name["SonarValid"], 1)
         self.assertEqual(by_name["SonarStaleSec"], "0.40")
+        self.assertEqual(by_name["SonarSeq"], 17)
+        self.assertEqual(by_name["SonarObservedAt"], "1234.500")
+        self.assertEqual(by_name["GoalDecision"], "inactive")
 
     def test_phase0_exit_columns_are_written_to_log_row(self):
         ctrl = _LogOnlyController()

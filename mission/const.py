@@ -22,7 +22,7 @@ class Phase(IntEnum):
 LOG_DIR = str(DEFAULT_RUNS_ROOT)
 LOG_PREFIX = "robust_log_"
 LOG_FILE_DATETIME_FORMAT = "%Y-%m%d-%H%M%S"
-MISSION_LOG_SCHEMA_VERSION = 1
+MISSION_LOG_SCHEMA_VERSION = 2
 
 # 大会／ミッション固有の制御契約。
 # 現在値はNSE2026で検証された現行ミッションを表し、由来は
@@ -37,10 +37,10 @@ TIMEOUT_PHASE_4 = 60
 TIMEOUT_PHASE_5 = 60
 DATA_SAMPLING_RATE = 0.20
 GRASS_MIN_MOTOR_SPEED = 45
-# 現機体の寄り不足への初期調整。中央合わせ後、右輪ゲイン込みでも65%以上で押す。
-PHASE6_RAM_SPEED = 75
-PHASE6_RAM_DURATION_SEC = 5.0
-PHASE6_RAM_RAMP_TIME = 0.05
+# Distance-controlled final approach; field calibration required.
+PHASE6_APPROACH_SPEED = 45
+PHASE6_APPROACH_TIMEOUT_SEC = 20.0
+PHASE6_APPROACH_RAMP_TIME = 0.05
 
 # ミッション全体のフェーズ累積予算
 # Phase3-5 は再入を考慮して、個別タイムアウトより大きい累積値を持たせる。
@@ -58,7 +58,7 @@ MISSION_PHASE3_CUMULATIVE_BUDGET = (
     - TIMEOUT_PHASE_2
     - MISSION_PHASE4_CUMULATIVE_BUDGET
     - MISSION_PHASE5_CUMULATIVE_BUDGET
-    - PHASE6_RAM_DURATION_SEC
+    - PHASE6_APPROACH_TIMEOUT_SEC
     - MISSION_TIMEOUT_TRANSITION_GRACE_SEC
 )
 if MISSION_PHASE3_CUMULATIVE_BUDGET < MISSION_PHASE3_MIN_RESERVE_SEC:
@@ -72,10 +72,10 @@ MISSION_PHASE_TIME_BUDGETS = {
     Phase.PHASE5: MISSION_PHASE5_CUMULATIVE_BUDGET,  # 接近(複数回)
 }
 MISSION_PHASE_BUDGET_TOTAL = sum(MISSION_PHASE_TIME_BUDGETS.values())
-# 全体タイムアウトは「フェーズ累積予算合計 + 最終突入 + 遷移吸収マージン」で導出する。
+# 全体タイムアウトは「フェーズ累積予算合計 + 距離制御の最終接近 + 遷移吸収マージン」で導出する。
 MISSION_TIMEOUT_TOTAL = (
     MISSION_PHASE_BUDGET_TOTAL
-    + PHASE6_RAM_DURATION_SEC
+    + PHASE6_APPROACH_TIMEOUT_SEC
     + MISSION_TIMEOUT_TRANSITION_GRACE_SEC
 )
 
@@ -153,12 +153,6 @@ CALIBRATION_TURN_SPEED = 60
 CALIBRATION_MAG_THRESHOLD = 2
 
 # 障害物回避関連定数
-OBSTACLE_AVOID_DIST = 30.0
-OBSTACLE_CONFIRM_COUNT = 3
-OBSTACLE_SPEED = 60
-OBSTACLE_BACKUP_TIME = 1.0
-OBSTACLE_TURN_TIME = 0.5
-OBSTACLE_PAUSE_TIME = 0.2
 
 # カメラ関連定数
 CAMERA_ACTIVE_SLEEP = 0.02
@@ -262,7 +256,7 @@ PHASE5_NEAR_OCCUPANCY_THRESHOLD = 0.08
 PHASE5_TURN_CLAMP = 20
 PHASE5_STEER_DEADBAND = 0.03
 # 近距離検知に加え、画像中心からのずれが画面幅の8%以内で最終突撃へ進む。
-PHASE5_RAM_CENTER_TOLERANCE = 0.08
+GOAL_CENTER_TOLERANCE = 0.08
 # Keep steering briefly toward the last reliable image position when one or
 # two frames are lost.  Stopping immediately leaves the camera looking away
 # from a cone that crossed the image edge during the P4 -> P5 handoff.
@@ -365,8 +359,19 @@ PIN_LED_GREEN = 5
 PIN_TRIG = 23
 PIN_ECHO = 24
 SONAR_MAX_DISTANCE = 4.0
-# 5 sampling periods (DATA_SAMPLING_RATE=0.2s). Older readings are not used for avoidance.
-SONAR_STALE_TIMEOUT_SEC = 1.0
+# Age of the actual echo attempt; cached reads do not refresh this deadline.
+SONAR_STALE_TIMEOUT_SEC = 0.5
+SONAR_MIN_DISTANCE_CM = 2.0
+GOAL_ENTRY_DISTANCE_CM = 60.0
+# Requested sensor-face target; proximity does not prove physical contact.
+GOAL_STOP_DISTANCE_CM = 5.0
+GOAL_CONFIRM_SAMPLES = 3
+GOAL_MAX_SAMPLE_SKEW_SEC = 0.3
+GOAL_MIN_OCCUPANCY = 0.01
+GOAL_MAX_DISTANCE_SPREAD_CM = 8.0
+GOAL_PULSE_SEC = 0.15
+GOAL_SETTLE_SEC = 0.3
+GOAL_OBSERVATION_TIMEOUT_SEC = 3.0
 
 # GPS関連定数
 GPS_SERIAL_PORT = "/dev/serial0"
@@ -524,7 +529,7 @@ TURN_GAIN_SCALE_MAX = 1.0
 # デフォルト値
 DEFAULT_VECTOR3 = (0.0, 0.0, 0.0)
 DEFAULT_BNO_CALIB = {"valid": False, "value": (0, 0, 0, 0)}
-DEFAULT_OBSTACLE_DIST_CM = 999.0
+DEFAULT_SONAR_DIST_CM = 999.0
 DEFAULT_FLOAT_VALUE = 0.0
 DEFAULT_PHASE = int(Phase.PHASE0)
 
@@ -558,8 +563,7 @@ DEVICE_KEYS = (
 
 # フェーズごとの動作制御関連定数
 PHASES_STOP_MOTORS = (Phase.PHASE0, Phase.PHASE7)
-PHASES_SKIP_OBSTACLE = (Phase.PHASE0, Phase.PHASE1, Phase.PHASE5, Phase.PHASE6, Phase.PHASE7)
-PHASES_CAMERA_ACTIVE = (Phase.PHASE4, Phase.PHASE5)
+PHASES_CAMERA_ACTIVE = (Phase.PHASE4, Phase.PHASE5, Phase.PHASE6)
 
 # ログのヘッダー
 LOG_HEADER = [
@@ -659,9 +663,13 @@ LOG_HEADER = [
     "CameraReinitAttemptCount",
     "CameraRecoveryElapsedSec",
     "CameraRecoveryExhausted",
-    "ObstacleDist",
+    "SonarDistanceCm",
     "SonarValid",
     "SonarStaleSec",
+    "SonarSeq",
+    "SonarObservedAt",
+    "GoalDecision",
+    "GoalConfirmCount",
     "AngleValid",
     "BNOStaleSec",
     "BNORecoveryActive",

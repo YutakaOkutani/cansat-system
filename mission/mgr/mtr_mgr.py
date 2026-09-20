@@ -1,7 +1,11 @@
 import math
 import time
 
+from mission.goal import goal_evidence
 from mission.const import (
+    GOAL_STOP_DISTANCE_CM,
+    PHASE6_APPROACH_SPEED,
+    PHASE6_APPROACH_RAMP_TIME,
     APPROACH_TURN_GAIN,
     BASE_SPEED,
     CAMERA_FRAME_STALE_STOP_SEC,
@@ -32,12 +36,6 @@ from mission.const import (
     MOTOR_SPEED_OFFSET_2,
     MOTOR_SPEED_SCALE_1,
     MOTOR_SPEED_SCALE_2,
-    OBSTACLE_AVOID_DIST,
-    OBSTACLE_BACKUP_TIME,
-    OBSTACLE_CONFIRM_COUNT,
-    OBSTACLE_PAUSE_TIME,
-    OBSTACLE_SPEED,
-    OBSTACLE_TURN_TIME,
     PARACHUTE_DIRECTION,
     PARACHUTE_MOTOR_PULSE,
     PARACHUTE_SEPARATION_SPEED,
@@ -112,7 +110,6 @@ from mission.const import (
     PHASE3_TURN_RAMP_TIME,
     PHASE3_TURN_INNER_SPEED,
     PHASE3_TURN_OUTER_SPEED,
-    PHASES_SKIP_OBSTACLE,
     PHASES_STOP_MOTORS,
     PWM_DUTY_MAX,
     PWM_DUTY_MIN,
@@ -125,7 +122,7 @@ from mission.const import (
     TURN_GAIN_SCALE_MIN,
     Phase,
 )
-from mission.cone_candidate import cone_centered_for_final_ram, evaluate_cone_candidate
+from mission.cone_candidate import cone_centered_for_final_approach, evaluate_cone_candidate
 from mission.motor_map import (
     apply_turn_speed_floor,
     forward_to_dir_value,
@@ -973,8 +970,12 @@ class MotorManager:
         if not self._camera_observation_fresh(snapshot, now):
             self.stop_motors()
             return
+        matched, _, _ = goal_evidence(snapshot, now, time.monotonic())
+        if matched:
+            self.stop_motors()
+            return
         close_reached = evaluate_cone_candidate(snapshot)["close_reached"]
-        if close_reached and cone_centered_for_final_ram(snapshot):
+        if close_reached and cone_centered_for_final_approach(snapshot):
             self.stop_motors()
             return
         if not self._camera_control_frame_ready(snapshot, now, 5):
@@ -1039,6 +1040,21 @@ class MotorManager:
             cmd_type=cmd_type,
         )
 
+    def _drive_phase6_approach(self, snapshot):
+        now = time.monotonic()
+        matched, _, distance = goal_evidence(snapshot, time.time(), now)
+        if (self._shutdown_active()
+                or bool(getattr(self, "mission_total_timeout_triggered", False))
+                or now >= float(getattr(self, "phase6_motion_until", 0.0))
+                or not matched or distance <= GOAL_STOP_DISTANCE_CM):
+            self.stop_motors()
+            return
+        self.set_motors(
+            PHASE6_APPROACH_SPEED, True, PHASE6_APPROACH_SPEED, True,
+            ramp_time=PHASE6_APPROACH_RAMP_TIME,
+            cmd_type="phase6_range_approach",
+        )
+
     def _record_motor_command(self, cmd_type, motor1_speed, motor1_forward, motor2_speed, motor2_forward):
         self.last_motor_command = {
             "type": cmd_type,
@@ -1054,7 +1070,6 @@ class MotorManager:
             try:
                 snapshot = self.st.snapshot()
                 phase = Phase(snapshot["phase"])
-                obstacle_dist = snapshot["obstacle_dist"]
                 direction = snapshot["direction"]
                 cone_direction = snapshot["cone_direction"]
                 last_phase = getattr(self, "_motor_last_phase", None)
@@ -1068,30 +1083,6 @@ class MotorManager:
                 if phase in PHASES_STOP_MOTORS:
                     self.stop_motors()
                     time.sleep(MOTOR_IDLE_SLEEP)
-                    continue
-
-                obstacle_detected = (
-                    phase not in PHASES_SKIP_OBSTACLE
-                    and bool(snapshot.get("obstacle_valid", False))
-                    and obstacle_dist is not None
-                    and 0 < obstacle_dist < OBSTACLE_AVOID_DIST
-                )
-                if obstacle_detected:
-                    self.obstacle_detect_count += 1
-                else:
-                    self.obstacle_detect_count = 0
-
-                if self.obstacle_detect_count >= OBSTACLE_CONFIRM_COUNT:
-                    print(f"Obstacle Detected! {obstacle_dist:.1f}cm")
-                    self.stop_motors()
-                    time.sleep(OBSTACLE_PAUSE_TIME)
-                    turn_fast = self._clamp_percent(OBSTACLE_SPEED)
-                    turn_slow = self._clamp_percent(OBSTACLE_SPEED * 0.35)
-                    self._set_forward_diff_turn("right", turn_fast, turn_slow, cmd_type="obstacle_forward_turn")
-                    time.sleep(OBSTACLE_TURN_TIME)
-                    self.stop_motors()
-                    time.sleep(OBSTACLE_PAUSE_TIME)
-                    self.obstacle_detect_count = 0
                     continue
 
                 if phase == Phase.PHASE1 and direction == PARACHUTE_DIRECTION:
@@ -1174,7 +1165,10 @@ class MotorManager:
                 elif phase == Phase.PHASE5:
                     self._drive_phase5_camera(snapshot)
 
-                if phase in (Phase.PHASE4, Phase.PHASE5):
+                elif phase == Phase.PHASE6:
+                    self._drive_phase6_approach(snapshot)
+
+                if phase in (Phase.PHASE4, Phase.PHASE5, Phase.PHASE6):
                     time.sleep(PHASE45_MOTOR_LOOP_INTERVAL)
                 elif phase == Phase.PHASE3:
                     time.sleep(PHASE3_MOTOR_LOOP_INTERVAL)

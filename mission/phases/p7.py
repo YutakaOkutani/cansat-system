@@ -23,6 +23,15 @@ class Phase7Handler(BasePhaseHandler):
             mission_end_reason = controller.mission_end_reason
         controller.phase7_arrival_reason = controller._resolve_phase7_arrival_reason()
 
+        if mission_end_reason == "GOAL_PROXIMITY_CONFIRMED" and not getattr(controller, "mission_total_timeout_triggered", False):
+            print("p7 : Goal proximity confirmed; physical contact is unverified")
+            if led_red:
+                led_red.on()
+            if led_green:
+                led_green.on()
+            controller.request_shutdown(mission_end_reason)
+            return
+
         give_up = getattr(controller, "mission_total_timeout_triggered", False) or mission_end_reason not in {
             "GOAL_REACHED",
             "PHASE7_EXIT",

@@ -163,7 +163,12 @@ COLUMN_GROUPS = [
             "Phase5ConeLostCount",
             "Phase5ReachConfirmCount",
             "Phase5EntryReason",
-            "ObstacleDist",
+            "SonarDistanceCm",
+            "ObstacleDist",  # Legacy logs
+            "SonarSeq",
+            "SonarObservedAt",
+            "GoalDecision",
+            "GoalConfirmCount",
             "SonarValid",
             "SonarStaleSec",
         ],

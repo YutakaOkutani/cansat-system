@@ -59,7 +59,7 @@ class _VisionController:
         if reached and include_close_debug:
             debug["close_reached_ok"] = 1
         self.st.update_cone(
-            cone_direction=direction,
+            cone_direction=direction, cone_image_direction=direction if reached else None,
             cone_probability=probability,
             cone_is_reached=reached,
             cone_valid=True,
@@ -68,6 +68,9 @@ class _VisionController:
             observation_time=observation_time,
             observation_accepted=True,
         )
+
+    def stop_motors(self):
+        self.stop_motor_calls += 1
 
     def transition_to_give_up(self, reason):
         self.mission_end_reason = reason
@@ -329,11 +332,41 @@ class ConePhaseDiagnosticsTest(unittest.TestCase):
         self.assertEqual(ctrl.cone_phase_reached_probability_threshold, 0.0)
         self.assertEqual(ctrl.st.snapshot()["phase"], int(Phase.PHASE5))
 
+    def test_phase5_visual_close_without_range_cannot_enter_final_approach(self):
+        ctrl = _VisionController(Phase.PHASE5)
+        for now in (100.0, 100.2, 100.4):
+            ctrl.update_cone_frame(reached=True, observation_time=now)
+            with patch("mission.phases.p5.time.time", return_value=now), patch("mission.phases.p5.time.monotonic", return_value=now):
+                Phase5Handler().execute(ctrl, ctrl.st.snapshot())
+            self.assertEqual(ctrl.st.snapshot()["phase"], int(Phase.PHASE5))
+            self.assertEqual(ctrl.phase5_reach_confirm_count, 0)
+        ctrl.update_cone_frame(reached=True, observation_time=103.1)
+        with patch("mission.phases.p5.time.time", return_value=103.1), patch("mission.phases.p5.time.monotonic", return_value=103.1):
+            Phase5Handler().execute(ctrl, ctrl.st.snapshot())
+        self.assertEqual(ctrl.mission_end_reason, "GOAL_RANGE_UNCONFIRMED")
+
+    def test_phase5_moderate_occupancy_with_new_range_pairs_enters_without_success(self):
+        ctrl = _VisionController(Phase.PHASE5)
+        for now, sonar_sequence, expected_count in ((100.0, 1, 1), (100.1, 1, 1), (100.2, 2, 2)):
+            ctrl.update_cone_frame(probability=0.8, reached=False, observation_time=now,
+                                   debug={"strict_red_ok": 1, "occupancy": 0.02})
+            ctrl.st.update_cone(cone_image_direction=0.5)
+            ctrl.st.update_sonar(sonar_distance_cm=30, sonar_valid=True,
+                                 sonar_sequence=sonar_sequence,
+                                 sonar_observed_at=100.0 if sonar_sequence == 1 else now,
+                                 sonar_observed_monotonic=100.0 if sonar_sequence == 1 else now)
+            with patch("mission.phases.p5.time.time", return_value=now), patch("mission.phases.p5.time.monotonic", return_value=now):
+                Phase5Handler().execute(ctrl, ctrl.st.snapshot())
+            self.assertEqual(ctrl.phase5_reach_confirm_count, expected_count)
+        self.assertEqual(ctrl.st.snapshot()["phase"], int(Phase.PHASE6))
+        self.assertEqual(ctrl.mission_end_reason, "RUNNING")
+
     def test_phase5_close_reached_bypasses_probability_and_confirms_twice(self):
         ctrl = _VisionController(Phase.PHASE5)
         ctrl.update_cone_frame(direction=0.50, probability=0.08, reached=True)
 
-        with patch("mission.phases.p5.time.time", return_value=100.0):
+        ctrl.st.update_sonar(sonar_distance_cm=30, sonar_valid=True, sonar_sequence=1, sonar_observed_at=100, sonar_observed_monotonic=100)
+        with patch("mission.phases.p5.time.time", return_value=100.0), patch("mission.phases.p5.time.monotonic", return_value=100.0):
             Phase5Handler().execute(ctrl, ctrl.st.snapshot())
 
         self.assertEqual(ctrl.cone_phase_decision, "p5_reached_confirm")
@@ -347,11 +380,13 @@ class ConePhaseDiagnosticsTest(unittest.TestCase):
             reached=True,
             observation_time=100.2,
         )
-        with patch("mission.phases.p5.time.time", return_value=100.2):
+        ctrl.st.update_sonar(sonar_distance_cm=30, sonar_valid=True, sonar_sequence=2, sonar_observed_at=100.2, sonar_observed_monotonic=100.2)
+        with patch("mission.phases.p5.time.time", return_value=100.2), patch("mission.phases.p5.time.monotonic", return_value=100.2):
             Phase5Handler().execute(ctrl, ctrl.st.snapshot())
 
         self.assertEqual(ctrl.cone_phase_decision, "p5_reached_to_p6")
         self.assertEqual(ctrl.st.snapshot()["phase"], int(Phase.PHASE6))
+        self.assertEqual(ctrl.mission_end_reason, "RUNNING")
 
     def test_phase5_off_center_close_cone_requires_new_centered_confirmations(self):
         ctrl = _VisionController(Phase.PHASE5)
@@ -364,7 +399,8 @@ class ConePhaseDiagnosticsTest(unittest.TestCase):
                 direction=direction, probability=0.08, reached=True,
                 observation_time=now,
             )
-            with patch("mission.phases.p5.time.time", return_value=now):
+            ctrl.st.update_sonar(sonar_distance_cm=30, sonar_valid=True, sonar_sequence=ctrl.st.snapshot()["cone_sequence"], sonar_observed_at=now, sonar_observed_monotonic=now)
+            with patch("mission.phases.p5.time.time", return_value=now), patch("mission.phases.p5.time.monotonic", return_value=now):
                 handler.execute(ctrl, ctrl.st.snapshot())
             self.assertEqual(ctrl.phase5_reach_confirm_count, count)
             self.assertEqual(ctrl.count_cone_lost, 0)

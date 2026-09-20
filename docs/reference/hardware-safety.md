@@ -7,7 +7,8 @@
 - Do not connect a standard 5 V HC-SR04 `ECHO` output directly to Raspberry Pi GPIO24.
 - Treat Raspberry Pi GPIO input as 3.3 V-only.
 - Treat the released `gerber/NSE2026 v2_2026-04-13.zip` board as lacking an ECHO level-conversion divider.
-- Add external level conversion before powering the sensor. The established divider is:
+- Direct connection is allowed when the module's ECHO output meets the Raspberry Pi GPIO input limits under the actual supply conditions (for example, a suitable 3.3 V-output module or one with integrated level conversion). Check the specific module's documentation or pulse voltage; successful readings alone do not establish electrical compatibility.
+- For a 5 V ECHO output, add external level conversion before connecting it to GPIO. If the output specification is unknown, establish it before choosing the wiring. The established divider for a 5 V output is:
 
 ```text
 HC-SR04 ECHO -- 10 kΩ --+-- GPIO24
@@ -17,9 +18,10 @@ HC-SR04 ECHO -- 10 kΩ --+-- GPIO24
                        GND
 ```
 
-- Connect `TRIG` to GPIO23, VCC to 5 V, and share GND.
+- This divider reduces 5 V to about 2.5 V; verify the target Pi's input-high requirement. Do not apply it again to an already compatible 3.3 V output.
+- Connect `TRIG` to GPIO23, power VCC according to the module specification (5 V for a standard HC-SR04), and share GND. Direct and level-converted ECHO wiring use the same software configuration.
 - Do not infer electrical safety from successful readings or from a compatible product name.
-- If ECHO was previously connected directly, do not re-energize it until level conversion is installed.
+- If ECHO was previously connected directly, check its output specification before reuse; add level conversion if it outputs 5 V.
 - Do not modify the released Gerber archive to represent a future board revision.
 
 ## Motor bench constraint
@@ -58,7 +60,7 @@ Do not claim a tier was run when hardware or operator safety conditions were una
 
 ## AI Checklist
 
-- Is HC-SR04 ECHO level-shifted before power is applied?
+- Does ECHO meet GPIO input limits, either directly or through suitable level conversion?
 - Are wheels controlled and a local power cutoff available?
 - Did motor mapping remain centralized and did every exit stop?
 - Is radio off for ordinary bench work with a local recovery path for real tests?

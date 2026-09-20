@@ -138,6 +138,8 @@ def parse_log_start_time(log_path: Path) -> datetime | None:
 
 def build_mission_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     result = df.copy()
+    if "SonarDistanceCm" not in result and "ObstacleDist" in result:
+        result["SonarDistanceCm"] = result["ObstacleDist"]
     has_sonar_valid = "SonarValid" in result.columns
     has_cone_diagnostics = "ConeDiagSchemaVersion" in result.columns
     numeric_cols = [
@@ -151,7 +153,7 @@ def build_mission_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "GPSFixQual",
         "GPSSats",
         "GPSHdop",
-        "ObstacleDist",
+        "SonarDistanceCm",
         "SonarValid",
         "SonarStaleSec",
         "Angle",
@@ -303,8 +305,8 @@ def summarize_mission(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float |
             if len(df) and df.attrs.get("cone_diagnostics_available", False)
             else np.nan
         ),
-        "closest_obstacle_cm": float(df.loc[df["sonar_valid"], "ObstacleDist"].replace(0, np.nan).min())
-        if df.loc[df["sonar_valid"], "ObstacleDist"].replace(0, np.nan).notna().any()
+        "closest_obstacle_cm": float(df.loc[df["sonar_valid"], "SonarDistanceCm"].replace(0, np.nan).min())
+        if df.loc[df["sonar_valid"], "SonarDistanceCm"].replace(0, np.nan).notna().any()
         else np.nan,
         "mission_end_reason": str(df["MissionEndReason"].dropna().iloc[-1]) if "MissionEndReason" in df.columns and df["MissionEndReason"].dropna().any() else "",
     }
@@ -316,14 +318,14 @@ def build_obstacle_map(df: pd.DataFrame, obstacle_max_cm: float) -> pd.DataFrame
         df["gps_valid"]
         & df["sonar_valid"]
         & df["heading_deg"].notna()
-        & df["ObstacleDist"].notna()
-        & (df["ObstacleDist"] > 0)
-        & (df["ObstacleDist"] <= obstacle_max_cm)
+        & df["SonarDistanceCm"].notna()
+        & (df["SonarDistanceCm"] > 0)
+        & (df["SonarDistanceCm"] <= obstacle_max_cm)
     ].copy()
     if obs.empty:
         return obs
 
-    obs["obstacle_m"] = obs["ObstacleDist"] / 100.0
+    obs["obstacle_m"] = obs["SonarDistanceCm"] / 100.0
     heading_rad = np.radians(obs["heading_deg"])
     obs["obstacle_x_m"] = obs["x_m"] + obs["obstacle_m"] * np.sin(heading_rad)
     obs["obstacle_y_m"] = obs["y_m"] + obs["obstacle_m"] * np.cos(heading_rad)
@@ -375,17 +377,17 @@ def build_event_table(df: pd.DataFrame) -> pd.DataFrame:
                 }
             )
 
-    close_obs = df[df["sonar_valid"] & (df["ObstacleDist"].fillna(np.inf) <= 60.0)].copy()
+    close_obs = df[df["sonar_valid"] & (df["SonarDistanceCm"].fillna(np.inf) <= 60.0)].copy()
     if not close_obs.empty:
         close_obs["obs_bucket"] = (close_obs["ElapsedSec"].fillna(0.0) / 3.0).astype(int)
-        close_obs = close_obs.sort_values("ObstacleDist", ascending=True).drop_duplicates("obs_bucket")
+        close_obs = close_obs.sort_values("SonarDistanceCm", ascending=True).drop_duplicates("obs_bucket")
         for _, row in close_obs.head(20).iterrows():
             rows.append(
                 {
                     "event_type": "close_obstacle",
                     "elapsed_sec": float(row["ElapsedSec"]),
                     "phase": int(row["Phase"]) if pd.notna(row["Phase"]) else np.nan,
-                    "label": f"Obstacle {float(row['ObstacleDist']):.0f}cm",
+                    "label": f"Reflection {float(row['SonarDistanceCm']):.0f}cm",
                     "x_m": float(row["x_m"]) if pd.notna(row["x_m"]) else np.nan,
                     "y_m": float(row["y_m"]) if pd.notna(row["y_m"]) else np.nan,
                     "z_m": float(row["z_m"]) if pd.notna(row["z_m"]) else np.nan,
@@ -472,7 +474,7 @@ def plot_static_map(
             s=20,
             alpha=0.65,
             marker="s",
-            label="Projected obstacles",
+            label="Projected sonar reflections",
         )
 
     if not events_df.empty:
@@ -571,8 +573,8 @@ def plot_interactive_3d(
                 z=obstacle_df["obstacle_z_m"],
                 mode="markers",
                 marker={"size": 3, "color": obstacle_df["obstacle_m"], "colorscale": "YlOrRd", "opacity": 0.8},
-                name="Obstacles",
-                hovertemplate="dist=%{text:.2f}m<br>x=%{x:.1f}m<br>y=%{y:.1f}m<extra>Obstacle</extra>",
+                name="Sonar reflections",
+                hovertemplate="dist=%{text:.2f}m<br>x=%{x:.1f}m<br>y=%{y:.1f}m<extra>Sonar reflection</extra>",
                 text=obstacle_df["obstacle_m"],
             )
         )
@@ -740,7 +742,7 @@ def write_summary_text(
         ),
         f"Cone reached rows: {summary['cone_reached_rows']}",
         f"Cone close-reached-qualified rows: {summary['cone_close_reached_rows']}",
-        f"Closest obstacle: {summary['closest_obstacle_cm']:.1f}cm" if not pd.isna(summary["closest_obstacle_cm"]) else "Closest obstacle: N/A",
+        f"Closest sonar reflection: {summary['closest_obstacle_cm']:.1f}cm" if not pd.isna(summary["closest_obstacle_cm"]) else "Closest sonar reflection: N/A",
         f"Mission end reason: {summary['mission_end_reason'] or 'N/A'}",
         f"Mission start (from log filename): {mission_start_dt.isoformat(sep=' ')}" if mission_start_dt else "Mission start (from log filename): unavailable",
         "",
@@ -763,7 +765,7 @@ def write_summary_text(
     lines.extend(
         [
             "",
-            f"Projected obstacle points: {len(obstacle_df)}",
+            f"Projected sonar reflection points: {len(obstacle_df)}",
             "Generated files:",
             "  explorer_map.png",
             "  terrain_profile.png",
@@ -797,7 +799,7 @@ def parse_args() -> argparse.Namespace:
         "--obstacle-max-cm",
         type=float,
         default=400.0,
-        help="Upper bound of obstacle distance used for map projection.",
+        help="Upper bound of sonar range used for map projection.",
     )
     parser.add_argument(
         "--grid-size",
@@ -879,7 +881,7 @@ def analyze_explorer_log(
             "ConePhaseCenterTolerance",
             "ConePhaseDirectionTolerance",
             "ConePhaseRequiredConfirmFrames",
-            "ObstacleDist",
+            "SonarDistanceCm",
             "SonarValid",
             "SonarStaleSec",
             "Distance",
@@ -898,7 +900,7 @@ def analyze_explorer_log(
             "obstacle_x_m",
             "obstacle_y_m",
             "obstacle_z_m",
-            "ObstacleDist",
+            "SonarDistanceCm",
             "heading_deg",
         ]
         if col in obstacle_df.columns
@@ -917,7 +919,7 @@ def analyze_explorer_log(
     print(f"[INFO] Output dir     : {out_dir}")
     print(f"[INFO] Valid GPS rows  : {int(df['gps_valid'].sum())} / {len(df)}")
     print(f"[INFO] Travel distance : {summary['traveled_distance_m']:.1f} m")
-    print(f"[INFO] Obstacles mapped: {len(obstacle_df)}")
+    print(f"[INFO] Sonar reflections projected: {len(obstacle_df)}")
     print(f"[INFO] Matplotlib      : {'enabled' if MATPLOTLIB_AVAILABLE else 'skipped (matplotlib not installed)'}")
     print(f"[INFO] Plotly 3D       : {'enabled' if PLOTLY_AVAILABLE else 'skipped (plotly not installed)'}")
     return out_dir

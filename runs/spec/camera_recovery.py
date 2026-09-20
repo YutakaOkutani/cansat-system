@@ -133,6 +133,9 @@ class CameraRecoveryTest(unittest.TestCase):
         self.assertEqual(ctrl.setup_calls, 1)
         self.assertTrue(ctrl._camera_runtime_active)
 
+        self.assertTrue(ctrl._sync_camera_runtime_for_phase(5))
+        self.assertTrue(ctrl._sync_camera_runtime_for_phase(6))
+        self.assertEqual(ctrl.setup_calls, 1)
         self.assertFalse(ctrl._sync_camera_runtime_for_phase(3))
         self.assertEqual(ctrl.release_calls, 1)
         self.assertIsNone(ctrl.devices["detector"])

@@ -6,10 +6,11 @@ import threading
 import time
 
 import cv2
-from gpiozero import DigitalOutputDevice, DistanceSensor, LED, PWMOutputDevice
+from gpiozero import DigitalOutputDevice, LED, PWMOutputDevice
 from gpiozero.pins.lgpio import LGPIOFactory
 
 from lib import bmp180, bno055
+from lib.sonar import SonarSensor
 from lib import cone_detect as dc
 
 from mission.const import (
@@ -258,7 +259,7 @@ class HardwareManager:
                 initial_value=False,
             )
             if include_sonar:
-                self.devices[DEVICE_SONAR] = DistanceSensor(
+                self.devices[DEVICE_SONAR] = SonarSensor(
                     echo=PIN_ECHO,
                     trigger=PIN_TRIG,
                     max_distance=SONAR_MAX_DISTANCE,
