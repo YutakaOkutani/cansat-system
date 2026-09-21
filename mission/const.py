@@ -324,8 +324,8 @@ MOTOR_DIR_INVERT_2 = False
 MOTOR_LEFT_MTR_INDEX = 1
 MOTOR_RIGHT_MTR_INDEX = 2
 MANUAL_TURN_SPEED_RATIO = 3.0 / 5.0
-# 旋回時の定常PWM下限。ゲイン補正後に同比率で引き上げ、100%で制限する。
-MOTOR_TURN_MIN_SPEED = 65.0
+# 前転・後転・旋回時の定常PWM下限。ゲイン補正後に同比率で引き上げ、100%で制限する。
+MOTOR_DRIVE_MIN_SPEED = 65.0
 # モーター個体差補正 (PWM指令値に乗算)
 MOTOR_SPEED_SCALE_1 = 1.00
 MOTOR_SPEED_SCALE_2 = 0.90  # 速い右輪を10%減速する初期調整値。実走で再調整する。

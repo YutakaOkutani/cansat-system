@@ -124,7 +124,7 @@ from mission.const import (
 )
 from mission.cone_candidate import cone_centered_for_final_approach, evaluate_cone_candidate
 from mission.motor_map import (
-    apply_turn_speed_floor,
+    apply_drive_speed_floor,
     forward_to_dir_value,
     get_manual_drive_pattern,
     map_logical_wheels_to_physical,
@@ -1351,14 +1351,10 @@ class MotorManager:
 
         target_motor_1 = self._apply_motor_speed_scale(speed_motor_1, 1)
         target_motor_2 = self._apply_motor_speed_scale(speed_motor_2, 2)
-        target_motor_1, target_motor_2 = apply_turn_speed_floor(
+        target_motor_1, target_motor_2 = apply_drive_speed_floor(
             target_motor_1,
             target_motor_2,
-            turning=(
-                min(speed_left, speed_right) > 0
-                and speed_left != speed_right
-                and bool(forward_left) == bool(forward_right)
-            ),
+            same_direction=bool(forward_left) == bool(forward_right),
         )
         current_motor_1, current_motor_2 = self._ramp_pwm_dual(
             motor_1_pwm,

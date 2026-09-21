@@ -35,7 +35,7 @@ spec.loader.exec_module(motor_diag)
 
 
 class MotorDiagnosticSafetyTest(unittest.TestCase):
-    def test_real_output_paths_apply_trim_and_turn_floor(self):
+    def test_real_output_paths_apply_trim_and_drive_floor(self):
         class Device:
             value = 0.0
 
@@ -49,7 +49,14 @@ class MotorDiagnosticSafetyTest(unittest.TestCase):
             ((85, True, 45, True), (100, 65)),
             ((60, True, 100, True), (65, 97.5)),
             ((100, True, 60, True), (100, 65)),
-            ((45, True, 45, True), (45, 40.5)),
+            ((45, True, 45, True), (65 / 0.9, 65)),
+            ((45, False, 45, False), (65 / 0.9, 65)),
+            ((65, True, 65, True), (65 / 0.9, 65)),
+            ((70, True, 70, True), (65 / 0.9, 65)),
+            ((70, False, 70, False), (65 / 0.9, 65)),
+            ((80, True, 80, True), (80, 72)),
+            ((80, False, 80, False), (80, 72)),
+            ((0, False, 0, False), (0, 0)),
             ((0, True, 0, True), (0, 0)),
             ((0, True, 45, True), (0, 40.5)),
             ((100, True, 0, True), (100, 0)),
@@ -81,6 +88,11 @@ class MotorDiagnosticSafetyTest(unittest.TestCase):
                 )
                 self.assertAlmostEqual(pwm1.value * 100, expected[0])
                 self.assertAlmostEqual(pwm2.value * 100, expected[1])
+                self.assertEqual(
+                    motor_diag._format_output(*requested),
+                    f"L={expected[0]:.1f}%{'F' if requested[1] else 'R'} "
+                    f"R={expected[1]:.1f}%{'F' if requested[3] else 'R'}",
+                )
                 self.assertEqual(dir1.value, int(not requested[1]))
                 self.assertEqual(dir2.value, int(requested[3]))
 
