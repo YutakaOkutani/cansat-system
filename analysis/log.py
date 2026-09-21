@@ -836,7 +836,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "log_path",
         nargs="?",
-        help="Path to a run directory, mission.csv, or legacy robust_log_*.csv.",
+        help="Path to a run directory, mission_*.csv, mission.csv, or legacy robust_log_*.csv.",
     )
     return parser.parse_args()
 

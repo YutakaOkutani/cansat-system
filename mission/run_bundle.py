@@ -121,7 +121,7 @@ def create_run_bundle(mission_config, run_context, *, log_root=None, now=None) -
     run_dir = parent / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
 
-    log_path = run_dir / "mission.csv"
+    log_path = run_dir / f"mission_{run_id}.csv"
     camera_dir = run_dir / "camera"
     reached_image_path = run_dir / "capture_reached.png"
     manifest_path = run_dir / "run-manifest.json"

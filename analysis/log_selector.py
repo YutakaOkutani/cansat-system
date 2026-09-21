@@ -12,6 +12,7 @@ LEGACY_LOGS_DIR = REPO_ROOT / "analysis" / "robust_logs"
 LOGS_DIR = LEGACY_LOGS_DIR
 RUN_MANIFEST_NAME = "run-manifest.json"
 BUNDLE_LOG_NAME = "mission.csv"
+BUNDLE_LOG_PATTERN = "mission_[0-9]*.csv"
 
 
 def _format_size(size_bytes: int) -> str:
@@ -28,8 +29,12 @@ def get_robust_log_candidates() -> list[Path]:
     candidates = []
     if DEFAULT_DATA_ROOT.exists():
         candidates.extend(DEFAULT_DATA_ROOT.rglob(BUNDLE_LOG_NAME))
+        candidates.extend(DEFAULT_DATA_ROOT.rglob(BUNDLE_LOG_PATTERN))
     if LEGACY_LOGS_DIR.exists():
+        candidates.extend(LEGACY_LOGS_DIR.rglob(BUNDLE_LOG_NAME))
+        candidates.extend(LEGACY_LOGS_DIR.rglob(BUNDLE_LOG_PATTERN))
         candidates.extend(LEGACY_LOGS_DIR.rglob("robust_log_*.csv"))
+    candidates = list(dict.fromkeys(candidates))
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return candidates
 
@@ -45,7 +50,9 @@ def load_run_manifest(log_path: Path) -> dict[str, object]:
 
 def is_run_bundle_log(log_path: Path) -> bool:
     path = Path(log_path)
-    return path.name == BUNDLE_LOG_NAME and (path.parent / RUN_MANIFEST_NAME).is_file()
+    return (path.name == BUNDLE_LOG_NAME or path.match(BUNDLE_LOG_PATTERN)) and (
+        path.parent / RUN_MANIFEST_NAME
+    ).is_file()
 
 
 def create_analysis_output_dir(log_path: Path, analyzer: str, legacy_root: Path) -> Path:
@@ -69,7 +76,7 @@ def find_latest_log() -> Path:
     candidates = get_robust_log_candidates()
     if not candidates:
         raise FileNotFoundError(
-            f"No mission.csv found in {DEFAULT_DATA_ROOT} and no robust_log_*.csv found in {LEGACY_LOGS_DIR}"
+            f"No mission logs found in {DEFAULT_DATA_ROOT} or {LEGACY_LOGS_DIR} (including robust_log_*.csv)"
         )
     return candidates[0]
 
@@ -85,7 +92,15 @@ def resolve_log_path(file_path: str | Path | None = None) -> Path:
     if file_path:
         path = Path(file_path).resolve()
         if path.is_dir():
-            path = path / BUNDLE_LOG_NAME
+            candidates = list(path.glob(BUNDLE_LOG_PATTERN))
+            legacy_path = path / BUNDLE_LOG_NAME
+            if legacy_path.is_file():
+                candidates.append(legacy_path)
+            if not candidates:
+                raise FileNotFoundError(f"No mission log found in: {path}")
+            if len(candidates) > 1:
+                raise ValueError(f"Multiple mission logs found in {path}; specify a CSV file")
+            path = candidates[0]
         if not path.exists():
             raise FileNotFoundError(f"Specified log file not found: {path}")
         return path
@@ -93,7 +108,7 @@ def resolve_log_path(file_path: str | Path | None = None) -> Path:
     candidates = get_robust_log_candidates()
     if not candidates:
         raise FileNotFoundError(
-            f"No mission.csv found in {DEFAULT_DATA_ROOT} and no robust_log_*.csv found in {LEGACY_LOGS_DIR}"
+            f"No mission logs found in {DEFAULT_DATA_ROOT} or {LEGACY_LOGS_DIR} (including robust_log_*.csv)"
         )
 
     # Fallback to latest log in non-interactive environment (e.g. CI, pipe)
