@@ -155,38 +155,18 @@ class _TimeoutHarness:
 
 
 class ControllerExceptionSafetyTest(unittest.TestCase):
-    def test_phase4_cumulative_timeout_skips_to_terminal_give_up(self):
-        harness = _TimeoutHarness()
-        time_module = CanSatController._handle_timeout_transitions.__globals__["time"]
-
-        with patch.object(time_module, "time", return_value=100.0):
-            handled = harness._handle_timeout_transitions(Phase.PHASE4)
-
-        self.assertTrue(handled)
-        self.assertEqual(harness.terminal_phase, Phase.PHASE7)
-        self.assertTrue(harness.motor_stopped)
-        self.assertEqual(harness.mission_end_reason, "PHASE4_TIMEOUT_GIVE_UP")
-        self.assertEqual(
-            harness.cone_phase_decision,
-            "p4_cumulative_timeout_to_p7_give_up",
-        )
-
-    def test_phase5_stale_camera_timeout_never_forces_blind_final_ram(self):
-        harness = _TimeoutHarness()
-        harness.last_phase_observed = Phase.PHASE5
-        time_module = CanSatController._handle_timeout_transitions.__globals__["time"]
-
-        with patch.object(time_module, "time", return_value=100.0):
-            handled = harness._handle_timeout_transitions(Phase.PHASE5)
-
-        self.assertTrue(handled)
-        self.assertEqual(harness.terminal_phase, Phase.PHASE7)
-        self.assertTrue(harness.motor_stopped)
-        self.assertEqual(harness.mission_end_reason, "PHASE5_CAMERA_STALE_GIVE_UP")
-        self.assertEqual(
-            harness.cone_phase_decision,
-            "p5_camera_stale_to_p7_give_up",
-        )
+    def test_dead_camera_waits_past_phase_budget_but_obeys_global_deadline(self):
+        for phase in (Phase.PHASE4, Phase.PHASE5):
+            harness = _TimeoutHarness()
+            harness.last_phase_observed = phase
+            time_module = CanSatController._handle_timeout_transitions.__globals__["time"]
+            with patch.object(time_module, "time", return_value=100.0):
+                self.assertFalse(harness._handle_timeout_transitions(phase))
+            self.assertEqual(harness.mission_end_reason, "RUNNING")
+            with patch.object(time_module, "time", return_value=1000.0):
+                self.assertTrue(harness._handle_timeout_transitions(phase))
+            self.assertEqual(harness.mission_end_reason, "MISSION_TOTAL_TIMEOUT")
+            self.assertEqual(harness.terminal_phase, Phase.PHASE7)
 
     def test_phase5_fresh_image_without_cone_never_forces_final_ram(self):
         harness = _TimeoutHarness()

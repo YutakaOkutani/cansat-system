@@ -10,11 +10,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from mission.const import (
-    CAMERA_DEAD_TIMEOUT,
     GOAL_MAX_DISTANCE_SPREAD_CM,
     GOAL_OBSERVATION_TIMEOUT_SEC,
     CAMERA_FRAME_STALE_STOP_SEC,
-    CAMERA_PHASE5_MAX_ATTEMPTS,
     CONE_PHASE5_REACH_CONFIRM_FRAMES,
     CONE_LOST_COUNT_LIMIT,
     CONE_PROBABILITY_THRESHOLD,
@@ -145,17 +143,20 @@ class Phase5Handler(BasePhaseHandler):
         )
         controller.goal_decision = goal_reason
         controller.goal_confirm_count = int(getattr(controller, "phase5_reach_confirm_count", 0))
-        # Visual near evidence may stop the vehicle while range is unavailable,
-        # but never authorizes a blind push or an unbounded wait.
+        # Keep tracking/waiting for range recovery until the mission deadline.
+        # The motor interlock holds position when the cone is visually close.
         if camera_fresh and evidence["close_reached"] and not is_reach_effective:
             if getattr(controller, "phase5_goal_wait_since", None) is None:
                 controller.phase5_goal_wait_since = time.monotonic()
             if time.monotonic() - controller.phase5_goal_wait_since >= GOAL_OBSERVATION_TIMEOUT_SEC:
-                controller.transition_to_give_up("GOAL_RANGE_UNCONFIRMED")
-                return
+                controller.goal_decision = "waiting_for_range_recovery"
         else:
             controller.phase5_goal_wait_since = None
-        if not is_reach_effective:
+        waiting_for_image = (
+            goal_reason == "observations_not_aligned"
+            and cone_sequence == int(getattr(controller, "phase5_last_processed_cone_seq", 0))
+        )
+        if not is_reach_effective and not waiting_for_image:
             controller.phase5_reach_confirm_count = 0
             controller.phase5_goal_distance = None
             controller.goal_confirm_count = 0
@@ -170,16 +171,6 @@ class Phase5Handler(BasePhaseHandler):
         )
         controller.cone_phase_detected = bool(is_det)
         controller.cone_phase_reached_effective = bool(is_reach_effective)
-        camera_dead = (
-            controller.camera_dead_since is not None
-            and now - controller.camera_dead_since >= CAMERA_DEAD_TIMEOUT
-        )
-        if camera_dead and not visible_cone and (
-            controller.camera_phase5_attempts >= CAMERA_PHASE5_MAX_ATTEMPTS
-            or (controller.camera_phase5_start is not None and now - controller.camera_phase5_start >= timeout_limit)
-        ):
-            self._fallback_to_p3(controller, current_snapshot, "Camera DEAD: Fallback to Phase3 (GPS/Straight)")
-            return
         if not camera_fresh:
             controller.cone_phase_detected = False
             controller.cone_phase_reached_effective = False

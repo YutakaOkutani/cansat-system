@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from mission.goal import goal_evidence
-from mission.const import Phase
+from mission.const import Phase, GOAL_STOP_DISTANCE_CM
 from mission.phases.p5 import Phase5Handler
 from mission.phases.p7 import Phase7Handler
 from mission.st import CanSatState
@@ -61,7 +61,7 @@ class GoalApproachTest(unittest.TestCase):
         self.assertEqual(ctrl.commands[-1], 'stop')
 
     def test_motor_stops_for_near_range_lost_target_stale_echo_or_shutdown(self):
-        for changes in ({'sonar_distance_cm': 5}, {'sonar_valid': False},
+        for changes in ({'sonar_distance_cm': GOAL_STOP_DISTANCE_CM}, {'sonar_valid': False},
                         {'cone_valid': False}, {'sonar_observed_monotonic': 99}):
             ctrl = Motor()
             with patch.object(motor.time, 'time', return_value=100), patch.object(motor.time, 'monotonic', return_value=100):

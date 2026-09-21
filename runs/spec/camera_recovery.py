@@ -159,7 +159,7 @@ class CameraRecoveryTest(unittest.TestCase):
         self.assertEqual(ctrl.camera_reinit_attempt_count, 0)
         self.assertFalse(ctrl.camera_recovery_exhausted)
 
-    def test_recovery_is_bounded_to_three_attempts_and_fifteen_seconds(self):
+    def test_recovery_continues_with_backoff_after_three_attempts(self):
         ctrl = _CameraRecoveryController()
 
         with patch.object(sns_mgr_under_test.dc, "detector", side_effect=_Detector, create=True):
@@ -175,8 +175,10 @@ class CameraRecoveryTest(unittest.TestCase):
             with patch.object(sns_mgr_under_test.time, "time", return_value=115.0):
                 self.assertFalse(ctrl._try_reinit_camera())
 
-        self.assertEqual(ctrl.camera_reinit_attempt_count, 3)
-        self.assertTrue(ctrl.camera_recovery_exhausted)
+            with patch.object(sns_mgr_under_test.time, "time", return_value=125.0):
+                self.assertTrue(ctrl._try_reinit_camera())
+
+        self.assertEqual(ctrl.camera_reinit_attempt_count, 4)
 
     def test_detector_recreation_is_not_a_recovery_until_a_valid_frame(self):
         ctrl = _CameraRecoveryController()

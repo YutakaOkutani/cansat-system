@@ -502,10 +502,10 @@ class SensorManager:
     def _try_reinit_camera(self, force=False, reason=None):
         now = time.time()
         attempts = int(getattr(self, "camera_reinit_attempt_count", 0))
-        if (not force) and attempts >= CAMERA_REINIT_MAX_ATTEMPTS:
-            self._update_camera_recovery_exhausted(now)
-            return False
-        if (not force) and now - self.camera_last_reinit < CAMERA_REINIT_INTERVAL:
+        retry_interval = (CAMERA_RECOVERY_GRACE_SEC
+                          if attempts >= CAMERA_REINIT_MAX_ATTEMPTS
+                          else CAMERA_REINIT_INTERVAL)
+        if (not force) and now - self.camera_last_reinit < retry_interval:
             return False
         self.camera_last_reinit = now
         self.camera_reinit_attempt_count = attempts + 1
@@ -513,7 +513,7 @@ class SensorManager:
             print(f"Camera: Reinit requested ({reason}).")
         print(
             "Camera: Reinit attempt "
-            f"{self.camera_reinit_attempt_count}/{CAMERA_REINIT_MAX_ATTEMPTS}."
+            f"{self.camera_reinit_attempt_count} (retry interval {retry_interval:.0f}s)."
         )
         try:
             if hasattr(self, "_release_camera_detector"):

@@ -165,7 +165,7 @@ CAMERA_REINIT_MAX_ATTEMPTS = 3
 # capture call.  The ROI-enabled field rate was 1.8 fps (p95 interval 0.72 s),
 # so allow normal processing jitter while still bounding a frozen camera.
 CAMERA_FRAME_STALE_STOP_SEC = 1.20
-# Phase4では再初期化3回に加え、最後の復帰確認のため最低15秒の猶予を持たせる。
+# 最初の3回は5秒間隔、その後は15秒間隔でミッション期限まで復旧を試みる。
 CAMERA_RECOVERY_GRACE_SEC = 15.0
 CAMERA_CONTROL_INVERT_X = False
 CAMERA_PHASE5_MAX_ATTEMPTS = 3
@@ -364,7 +364,7 @@ SONAR_STALE_TIMEOUT_SEC = 0.5
 SONAR_MIN_DISTANCE_CM = 2.0
 GOAL_ENTRY_DISTANCE_CM = 60.0
 # Requested sensor-face target; proximity does not prove physical contact.
-GOAL_STOP_DISTANCE_CM = 5.0
+GOAL_STOP_DISTANCE_CM = 3.0
 GOAL_CONFIRM_SAMPLES = 3
 GOAL_MAX_SAMPLE_SKEW_SEC = 0.3
 GOAL_MIN_OCCUPANCY = 0.01

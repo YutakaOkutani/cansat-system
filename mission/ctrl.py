@@ -412,7 +412,21 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
             return False
 
         if current_phase in (Phase.PHASE4, Phase.PHASE5):
-            if camera_has_visible_cone(self.st.snapshot(), now):
+            camera_snapshot = self.st.snapshot()
+            try:
+                camera_fresh = (
+                    camera_snapshot.get("cone_valid", False)
+                    and int(camera_snapshot.get("cone_sequence", 0)) > 0
+                    and 0 <= now - float(camera_snapshot.get("cone_updated_at", 0))
+                    <= CAMERA_FRAME_STALE_STOP_SEC
+                )
+            except (TypeError, ValueError, OverflowError):
+                camera_fresh = False
+            # A failed camera gets the remaining mission time to recover.
+            # MotorManager independently stops motion on stale observations.
+            if not camera_fresh:
+                return False
+            if camera_has_visible_cone(camera_snapshot, now):
                 # A live target remains authoritative until the global deadline.
                 return False
 

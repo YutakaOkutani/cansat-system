@@ -129,6 +129,7 @@ class ConePhaseDiagnosticsTest(unittest.TestCase):
     def test_phase4_timeout_stops_and_skips_directly_to_phase7(self):
         ctrl = _VisionController(Phase.PHASE4)
 
+        ctrl.update_cone_frame(probability=0.0, observation_time=160.0)
         with patch("mission.phases.p4.time.time", return_value=160.0):
             Phase4Handler().execute(ctrl, ctrl.st.snapshot())
 
@@ -137,7 +138,7 @@ class ConePhaseDiagnosticsTest(unittest.TestCase):
         self.assertEqual(ctrl.cone_phase_decision, "p4_timeout_to_p7_give_up")
         self.assertEqual(ctrl.stop_motor_calls, 1)
 
-    def test_phase4_camera_recovery_exhaustion_gives_up(self):
+    def test_phase4_camera_recovery_exhaustion_keeps_waiting(self):
         ctrl = _VisionController(Phase.PHASE4)
         ctrl.camera_recovery_exhausted = True
         ctrl.camera_reinit_attempt_count = 3
@@ -145,10 +146,23 @@ class ConePhaseDiagnosticsTest(unittest.TestCase):
         with patch("mission.phases.p4.time.time", return_value=100.0):
             Phase4Handler().execute(ctrl, ctrl.st.snapshot())
 
-        self.assertEqual(ctrl.st.snapshot()["phase"], int(Phase.PHASE7))
-        self.assertEqual(ctrl.mission_end_reason, "PHASE4_CAMERA_DEAD_GIVE_UP")
-        self.assertEqual(ctrl.cone_phase_decision, "p4_camera_dead_to_p7_give_up")
-        self.assertEqual(ctrl.stop_motor_calls, 1)
+        self.assertEqual(ctrl.st.snapshot()["phase"], int(Phase.PHASE4))
+        self.assertEqual(ctrl.mission_end_reason, "RUNNING")
+        self.assertEqual(ctrl.cone_phase_decision, "p4_wait_first_camera_frame")
+
+    def test_dead_camera_past_local_timeout_waits_in_camera_phases(self):
+        for phase, handler, module in (
+            (Phase.PHASE4, Phase4Handler(), "mission.phases.p4"),
+            (Phase.PHASE5, Phase5Handler(), "mission.phases.p5"),
+        ):
+            ctrl = _VisionController(phase)
+            ctrl.camera_dead_since = 1.0
+            ctrl.camera_phase5_attempts = 10
+            ctrl.camera_recovery_exhausted = True
+            with patch(module + ".time.time", return_value=200.0):
+                handler.execute(ctrl, ctrl.st.snapshot())
+            self.assertEqual(ctrl.st.snapshot()["phase"], int(phase))
+            self.assertEqual(ctrl.mission_end_reason, "RUNNING")
 
     def test_phase4_records_direction_consistency_reset(self):
         ctrl = _VisionController(Phase.PHASE4)
@@ -343,7 +357,9 @@ class ConePhaseDiagnosticsTest(unittest.TestCase):
         ctrl.update_cone_frame(reached=True, observation_time=103.1)
         with patch("mission.phases.p5.time.time", return_value=103.1), patch("mission.phases.p5.time.monotonic", return_value=103.1):
             Phase5Handler().execute(ctrl, ctrl.st.snapshot())
-        self.assertEqual(ctrl.mission_end_reason, "GOAL_RANGE_UNCONFIRMED")
+        self.assertEqual(ctrl.mission_end_reason, "RUNNING")
+        self.assertEqual(ctrl.st.snapshot()["phase"], int(Phase.PHASE5))
+        self.assertEqual(ctrl.goal_decision, "waiting_for_range_recovery")
 
     def test_phase5_moderate_occupancy_with_new_range_pairs_enters_without_success(self):
         ctrl = _VisionController(Phase.PHASE5)
@@ -360,6 +376,20 @@ class ConePhaseDiagnosticsTest(unittest.TestCase):
             self.assertEqual(ctrl.phase5_reach_confirm_count, expected_count)
         self.assertEqual(ctrl.st.snapshot()["phase"], int(Phase.PHASE6))
         self.assertEqual(ctrl.mission_end_reason, "RUNNING")
+
+    def test_phase5_slow_camera_preserves_confirmation_between_images(self):
+        ctrl = _VisionController(Phase.PHASE5)
+        for index in range(4):
+            now = 100 + index * 0.2
+            if index in (0, 3):
+                ctrl.update_cone_frame(reached=True, observation_time=now)
+            ctrl.st.update_sonar(sonar_distance_cm=30, sonar_valid=True,
+                                 sonar_sequence=index + 1,
+                                 sonar_observed_at=now, sonar_observed_monotonic=now)
+            with patch("mission.phases.p5.time.time", return_value=now), patch("mission.phases.p5.time.monotonic", return_value=now):
+                Phase5Handler().execute(ctrl, ctrl.st.snapshot())
+            self.assertEqual(ctrl.phase5_reach_confirm_count, 1 if index < 3 else 2)
+        self.assertEqual(ctrl.st.snapshot()["phase"], int(Phase.PHASE6))
 
     def test_phase5_close_reached_bypasses_probability_and_confirms_twice(self):
         ctrl = _VisionController(Phase.PHASE5)

@@ -328,19 +328,12 @@ class Phase4Handler(BasePhaseHandler):
             controller.camera_phase4_attempts += 1
             controller.camera_phase4_start = controller.time_start_searching_cone
         else:
-            if now - controller.time_start_searching_cone >= TIMEOUT_PHASE_4 and not visible_cone:
+            if now - controller.time_start_searching_cone >= TIMEOUT_PHASE_4 and camera_fresh and not visible_cone:
                 print("Phase4 TIMEOUT: stopping camera phases and giving up")
                 controller.cone_phase_decision = "p4_timeout_to_p7_give_up"
                 controller.searching_flag = False
                 controller.transition_to_give_up("PHASE4_TIMEOUT_GIVE_UP")
                 return
-        if bool(getattr(controller, "camera_recovery_exhausted", False)) and not visible_cone:
-            attempts = int(getattr(controller, "camera_reinit_attempt_count", 0))
-            print(f"Camera DEAD after {attempts} reinit attempts: giving up")
-            controller.cone_phase_decision = "p4_camera_dead_to_p7_give_up"
-            controller.searching_flag = False
-            controller.transition_to_give_up("PHASE4_CAMERA_DEAD_GIVE_UP")
-            return
         if not camera_fresh:
             controller.cone_phase_decision = (
                 "p4_wait_first_camera_frame"

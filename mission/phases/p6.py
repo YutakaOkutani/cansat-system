@@ -29,6 +29,14 @@ class Phase6Handler(BasePhaseHandler):
         controller.goal_decision = reason.lower()
         controller.st.update_navigation(phase=int(Phase.PHASE7))
 
+    def _retry(self, controller, reason):
+        self._stop(controller)
+        controller.goal_decision = reason
+        controller.phase5_entry_marker = None
+        controller.time_camera_start = 0.0
+        controller.phase5_entry_reason = reason
+        controller.st.update_navigation(phase=int(Phase.PHASE5))
+
     def execute(self, controller, snapshot):
         now = time.monotonic()
         marker = getattr(controller, "phase_entry_time", None)
@@ -50,20 +58,26 @@ class Phase6Handler(BasePhaseHandler):
             self._finish(controller, "MISSION_TOTAL_TIMEOUT")
             return
         if now - controller.phase6_start_time >= PHASE6_APPROACH_TIMEOUT_SEC:
-            self._finish(controller, "GOAL_APPROACH_TIMEOUT")
+            self._retry(controller, "goal_approach_retry")
             return
 
         snapshot = controller.st.snapshot()
         matched, reason, distance = goal_evidence(snapshot, time.time(), now)
         controller.goal_decision = reason
         if not matched:
+            was_moving = controller.phase6_stage == "move"
             self._stop(controller)
-            controller.phase6_distances = []
-            controller.goal_confirm_count = 0
+            # Faster sonar updates can exceed the pairing skew while waiting
+            # for the next image. Keep stopped confirmations across that gap;
+            # otherwise a ~1.8 fps camera can never accumulate three pairs.
+            if was_moving or reason != "observations_not_aligned":
+                controller.phase6_distances = []
+                controller.goal_confirm_count = 0
             controller.phase6_stage = "settle"
-            controller.phase6_observe_after = now + GOAL_SETTLE_SEC
+            if was_moving:
+                controller.phase6_observe_after = now + GOAL_SETTLE_SEC
             if now - controller.phase6_wait_since >= GOAL_OBSERVATION_TIMEOUT_SEC:
-                self._finish(controller, "GOAL_OBSERVATION_LOST")
+                self._retry(controller, "goal_observation_retry")
             return
 
         if controller.phase6_stage == "move":
