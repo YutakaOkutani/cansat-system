@@ -14,6 +14,7 @@ from lib.sonar import SonarSensor
 from lib import cone_detect as dc
 
 from mission.const import (
+    CAMERA_CLOSE_TIMEOUT_SEC,
     BNO_FUSION_OK_STATES,
     BNO_INIT_READY_TIMEOUT,
     BNO_INIT_SAMPLE_INTERVAL,
@@ -162,17 +163,35 @@ class HardwareManager:
         return roi_images
 
     def _release_camera_detector(self):
-        detector = self.devices.get(DEVICE_DETECTOR)
-        if detector is None:
-            return
-        try:
-            close_fn = getattr(detector, "close", None)
-            if callable(close_fn):
-                close_fn()
-        except Exception as exc:
-            print(f"Camera: Detector close error {exc}.")
-        finally:
-            self.devices[DEVICE_DETECTOR] = None
+        """Bound camera cleanup so a stuck driver cannot block the final log.
+
+        A still-closing detector prevents creation of another device instance.
+        Callers may retry later, but must never wait indefinitely for close().
+        """
+        lock = self.__dict__.setdefault('_camera_release_lock', threading.Lock())
+        with lock:
+            worker = getattr(self, '_camera_close_worker', None)
+            if worker is None or not worker.is_alive():
+                detector = self.devices.get(DEVICE_DETECTOR)
+                if detector is None:
+                    return True
+                self.devices[DEVICE_DETECTOR] = None
+                def close_detector():
+                    try:
+                        close_fn = getattr(detector, 'close', None)
+                        if callable(close_fn):
+                            close_fn()
+                    except Exception as exc:
+                        print(f'Camera: Detector close error {exc}.')
+                worker = threading.Thread(target=close_detector, daemon=True,
+                                          name='camera-close')
+                self._camera_close_worker = worker
+                worker.start()
+        worker.join(timeout=CAMERA_CLOSE_TIMEOUT_SEC)
+        if worker.is_alive():
+            print('Camera: close timed out; detector recreation deferred.')
+            return False
+        return True
 
     def _setup_bno_device(self):
         try:
@@ -195,7 +214,10 @@ class HardwareManager:
     def _setup_camera_detector(self):
         print("Camera: Initializing...")
         try:
-            self._release_camera_detector()
+            if self._release_camera_detector() is False:
+                return False
+            if getattr(self, '_shutdown_requested', False):
+                return False
             detector = dc.detector()
             roi_images = self._load_roi_images()
             roi_img = roi_images[0] if roi_images else None

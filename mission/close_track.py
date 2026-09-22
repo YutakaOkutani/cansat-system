@@ -12,11 +12,11 @@ from mission.const import (
     CONE_CLOSE_TRACK_MAX_SEC, CONE_CLOSE_TRACK_MAX_TURN_DEG,
     CONE_CLOSE_TRACK_MIN_OCCUPANCY, CONE_CLOSE_TRACK_MAX_HUE_CHANGE,
     CONE_CLOSE_TRACK_MAX_SV_CHANGE, GOAL_CENTER_TOLERANCE,
-    CONE_CLOSE_TRACK_MIN_HUE, CONE_CLOSE_TRACK_MIN_SV,
+    CONE_CLOSE_TRACK_MIN_HUE, CONE_CLOSE_TRACK_MIN_SV, CONE_CLOSE_TRACK_SURFACE_HUE,
     CONE_CLOSE_TRACK_MIN_ROI_SUPPORT, CONE_CLOSE_TRACK_WIDTH_FRAC,
     CONE_CLOSE_TRACK_MIN_EDGES, CONE_CLOSE_TRACK_BEARING_TOLERANCE_DEG,
     CONE_CLOSE_TRACK_OCCUPANCY_RATIO_MIN, CONE_CLOSE_TRACK_OCCUPANCY_RATIO_MAX,
-    GOAL_MAX_SAMPLE_SKEW_SEC, SONAR_MIN_DISTANCE_CM, SONAR_STALE_TIMEOUT_SEC,
+    GOAL_ENTRY_DISTANCE_CM, GOAL_MAX_SAMPLE_SKEW_SEC, SONAR_MIN_DISTANCE_CM, SONAR_STALE_TIMEOUT_SEC,
     BNO_HEADING_RECOVERY_STALE_SEC,
 )
 
@@ -39,13 +39,13 @@ def cropped_region(snapshot):
             and number(d, 'occupancy') >= CONE_CLOSE_TRACK_MIN_OCCUPANCY)
 
 
-def fresh_range(snapshot, now, mono):
+def fresh_range(snapshot, now, mono, limit=CONE_CLOSE_TRACK_DISTANCE_CM):
     distance = number(snapshot, 'sonar_distance_cm')
     return (snapshot.get('sonar_valid', False)
             and number(snapshot, 'sonar_sequence') > 0
             and 0 <= mono - number(snapshot, 'sonar_observed_monotonic') < SONAR_STALE_TIMEOUT_SEC
             and 0 <= now - number(snapshot, 'sonar_observed_at') < SONAR_STALE_TIMEOUT_SEC
-            and SONAR_MIN_DISTANCE_CM <= distance <= CONE_CLOSE_TRACK_DISTANCE_CM)
+            and SONAR_MIN_DISTANCE_CM <= distance <= limit)
 
 
 def fresh_heading(snapshot, mono):
@@ -66,7 +66,6 @@ def close_track_evidence(snapshot, now, mono):
         and mono <= number(track, 'deadline')
         and fresh_range(snapshot, now, mono)
         and fresh_heading(snapshot, mono)
-        and number(snapshot, 'heading_travel_deg') - number(track, 'center_travel') <= CONE_CLOSE_TRACK_MAX_TURN_DEG
         and heading_delta(number(snapshot, 'angle'), number(track, 'center_heading')) <= CONE_CLOSE_TRACK_MAX_TURN_DEG
     )
 
@@ -91,8 +90,17 @@ class CloseConeTrack:
                     center_heading=self.center[0] if self.center else float('nan'),
                     center_travel=self.center[1] if self.center else float('nan'))
 
+    def suspend(self, reason):
+        """Stop using evidence now, but retain identity until its fixed expiry."""
+        self.result = self._result(reason, sequence=self.result['sequence'])
+
+    def observe_heading(self, s):
+        # Check every IMU sample: turn-away/turn-back cannot hide an excursion.
+        if self.center and heading_delta(number(s, 'angle'), self.center[0]) > CONE_CLOSE_TRACK_MAX_TURN_DEG:
+            self.invalidate('heading_excursion')
+
     def invalidate(self, reason):
-        """Forget identity immediately on sensor loss, retaining the stop."""
+        """Revoke identity on contradiction or expiry, retaining the stop."""
         sequence = self.result['sequence']
         self.count = 0
         self.previous = None
@@ -116,10 +124,14 @@ class CloseConeTrack:
         # Sensor loss/expiry never releases this stop into a search arc.
         if camera_ok and clipped and range_ok:
             self.hold = True
+        if mono > self.deadline and self.anchor:
+            self.invalidate('identity_expired')
+        self.observe_heading(s)
         reason = 'collecting'
         eligible = False
         color_ok = (e['hue'] >= CONE_CLOSE_TRACK_MIN_HUE and e['sv'] >= CONE_CLOSE_TRACK_MIN_SV
-                    and e['roi_support'] >= CONE_CLOSE_TRACK_MIN_ROI_SUPPORT
+                    and (e['roi_support'] >= CONE_CLOSE_TRACK_MIN_ROI_SUPPORT
+                         or (clipped and e['hue'] >= CONE_CLOSE_TRACK_SURFACE_HUE))
                     and number(d, 'roi_negative_support', 0) <= e['roi_absolute_support']
                     and number(d, 'ground_penalty', 1) >= 0.5)
         current = dict(time=now, direction=number(s, 'cone_image_direction'),
@@ -141,9 +153,8 @@ class CloseConeTrack:
                           and heading_delta(current['bearing'], p['bearing']) <= CONE_CLOSE_TRACK_BEARING_TOLERANCE_DEG)
         if not continuous:
             self.count = 0
-            self.anchor = None
-            self.center = None
-            self.deadline = 0.0
+            if self.anchor is None:
+                self.center = None
 
         # Acquire only from ordinary, not fully clipped observations. A single
         # close_reached shortcut cannot arm the history.
@@ -156,26 +167,22 @@ class CloseConeTrack:
                 reason = 'identified'
         elif not clipped:
             self.count = 0
-            self.anchor = None
-            self.center = None
-            reason = 'target_lost'
+            reason = 'target_temporarily_missing'
 
-        # A strong current candidate may establish centering after the last
-        # steering correction, but only for an already acquired identity.
-        if (self.anchor and valid and (e['candidate'] or e['close_reached'])
+        # Keep an ordinary centered view seen during identity acquisition.
+        # It grants nothing until the independent multi-frame identity exists.
+        # A clipped candidate can establish centering only after acquisition.
+        if ((self.anchor or ordinary) and valid and (e['candidate'] or e['close_reached'])
                 and (self.center is None or not clipped)
                 and abs(current['direction'] - 0.5) <= GOAL_CENTER_TOLERANCE
-                and mono <= self.deadline and range_ok):
+                and (ordinary or mono <= self.deadline)
+                and fresh_range(s, now, mono, GOAL_ENTRY_DISTANCE_CM)):
             self.center = (number(s, 'angle'), number(s, 'heading_travel_deg'), mono)
 
-        if self.hold and (not range_ok or not valid):
-            self.anchor = None
-            self.center = None
-            self.count = 0
-        if clipped and not color_ok:
-            self.anchor = None
-            self.center = None
-            self.count = 0
+        # Strong contradictory negative evidence revokes the identity. A weak
+        # ROI, missing echo or brief color dropout merely suspends its use.
+        if clipped and number(d, 'roi_negative_support', 0) > e['roi_absolute_support']:
+            self.invalidate('negative_region_contradiction')
 
         if clipped:
             reason = 'close_identity_unconfirmed'
@@ -185,7 +192,6 @@ class CloseConeTrack:
                             and mono <= self.center[2] + CONE_CLOSE_TRACK_MAX_SEC
                             and abs(current['hue'] - self.anchor['hue']) <= CONE_CLOSE_TRACK_MAX_HUE_CHANGE
                             and abs(current['sv'] - self.anchor['sv']) <= CONE_CLOSE_TRACK_MAX_SV_CHANGE
-                            and number(s, 'heading_travel_deg') - self.center[1] <= CONE_CLOSE_TRACK_MAX_TURN_DEG
                             and heading_delta(number(s, 'angle'), self.center[0]) <= CONE_CLOSE_TRACK_MAX_TURN_DEG
                             and abs(number(s, 'sonar_observed_at') - number(s, 'cone_updated_at')) <= GOAL_MAX_SAMPLE_SKEW_SEC)
                 reason = 'close_track_continuation' if eligible else 'close_track_expired_or_inconsistent'

@@ -40,7 +40,7 @@ GRASS_MIN_MOTOR_SPEED = 45
 # Distance-controlled final approach; field calibration required.
 PHASE6_APPROACH_SPEED = 45
 PHASE6_APPROACH_TIMEOUT_SEC = 20.0
-PHASE6_APPROACH_RAMP_TIME = 0.05
+PHASE6_APPROACH_RAMP_TIME = 0.0  # Nonblocking: motor loop enforces short pulse deadlines.
 
 # ミッション全体のフェーズ累積予算
 # Phase3-5 は再入を考慮して、個別タイムアウトより大きい累積値を持たせる。
@@ -371,7 +371,23 @@ GOAL_MIN_OCCUPANCY = 0.01
 GOAL_MAX_DISTANCE_SPREAD_CM = 8.0
 GOAL_PULSE_SEC = 0.15
 GOAL_SETTLE_SEC = 0.3
-GOAL_OBSERVATION_TIMEOUT_SEC = 3.0
+GOAL_OBSERVATION_TIMEOUT_SEC = 6.0
+# Stopped voting and bounded motion; the success threshold remains 3 cm.
+GOAL_VOTE_WINDOW_SIZE = 5
+GOAL_VOTE_WINDOW_SEC = 3.0
+GOAL_RESUME_DISTANCE_CM = 3.5
+GOAL_FAR_CONFIRM_SAMPLES = 2
+GOAL_NEAR_PULSE_SEC = 0.05
+GOAL_NEAR_PULSE_DISTANCE_CM = 8.0
+GOAL_MAX_PULSES = 12
+GOAL_PROGRESS_MIN_CM = 0.5
+GOAL_PROGRESS_PULSES = 4
+GOAL_SETTLE_HEADING_DEG = 5.0
+GOAL_ALIGN_MIN_DISTANCE_CM = 6.0
+GOAL_ALIGN_PULSE_SEC = 0.05
+GOAL_EARLY_ENTRY_DISTANCE_CM = 30.0
+CAMERA_CLOSE_TIMEOUT_SEC = 1.0
+CONE_CLOSE_TRACK_SURFACE_HUE = 0.85
 
 # A previously identified cone may fill the image during the last approach.
 # These gates authorize continuity, never a new detection from a red screen.

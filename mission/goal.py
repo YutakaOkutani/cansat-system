@@ -3,12 +3,13 @@ import math
 from mission.cone_candidate import camera_has_visible_cone, evaluate_cone_candidate
 from mission.close_track import close_track_evidence, cropped_region
 from mission.const import (
-    GOAL_ENTRY_DISTANCE_CM, GOAL_MAX_SAMPLE_SKEW_SEC, GOAL_MIN_OCCUPANCY,
+    GOAL_EARLY_ENTRY_DISTANCE_CM, GOAL_ALIGN_MIN_DISTANCE_CM, GOAL_ENTRY_DISTANCE_CM,
+    GOAL_MAX_SAMPLE_SKEW_SEC, GOAL_MIN_OCCUPANCY,
     GOAL_CENTER_TOLERANCE, SONAR_MIN_DISTANCE_CM, SONAR_STALE_TIMEOUT_SEC,
 )
 
 
-def goal_evidence(snapshot, now, monotonic_now):
+def goal_evidence(snapshot, now, monotonic_now, *, require_center=True):
     try:
         distance = float(snapshot.get('sonar_distance_cm', float('nan')))
         age = monotonic_now - float(snapshot.get('sonar_observed_monotonic', 0))
@@ -25,7 +26,7 @@ def goal_evidence(snapshot, now, monotonic_now):
             return False, 'cone_unconfirmed', distance
         if not snapshot.get('cone_image_direction_valid', False) or not math.isfinite(direction):
             return False, 'image_direction_invalid', distance
-        if not continuation and abs(direction - 0.5) > GOAL_CENTER_TOLERANCE:
+        if require_center and not continuation and abs(direction - 0.5) > GOAL_CENTER_TOLERANCE:
             return False, 'cone_off_axis', distance
         if not evidence['close_reached'] and evidence['occupancy'] < GOAL_MIN_OCCUPANCY:
             return False, 'visual_range_mismatch', distance
@@ -40,3 +41,26 @@ def goal_evidence(snapshot, now, monotonic_now):
         return True, 'close_track_camera_sonar_matched' if continuation else 'camera_sonar_matched', distance
     except (TypeError, ValueError, OverflowError):
         return False, 'invalid_observation', float('nan')
+
+
+def final_entry_evidence(snapshot, now, mono):
+    """Ordinary, near off-axis targets hand over to bounded alignment."""
+    matched, reason, distance = goal_evidence(snapshot, now, mono)
+    if not matched and reason == 'cone_off_axis':
+        matched, reason, distance = alignment_evidence(snapshot, now, mono)
+        if distance > GOAL_EARLY_ENTRY_DISTANCE_CM:
+            return False, 'cone_off_axis', distance
+    return matched, reason, distance
+
+
+def alignment_evidence(snapshot, now, mono):
+    matched, reason, distance = goal_evidence(snapshot, now, mono, require_center=False)
+    try:
+        direction = float(snapshot.get('cone_direction', float('nan')))
+    except (TypeError, ValueError, OverflowError):
+        return False, 'control_direction_invalid', distance
+    if not math.isfinite(direction) or not 0 <= direction <= 1:
+        return False, 'control_direction_invalid', distance
+    if cropped_region(snapshot) or distance < GOAL_ALIGN_MIN_DISTANCE_CM:
+        return False, 'alignment_clearance_or_shape', distance
+    return matched, reason, distance

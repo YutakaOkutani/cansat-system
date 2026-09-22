@@ -291,6 +291,9 @@ class Phase4Handler(BasePhaseHandler):
                 controller.phase5_last_processed_cone_seq = 0
                 controller.cone_phase_decision = 'p4_close_track_to_p5'
                 controller.st.update_navigation(phase=int(Phase.PHASE5))
+            else:
+                controller.phase6_motion_until = 0.0
+                controller.st.update_navigation(phase=int(Phase.PHASE6))
             return
         visible_cone = camera_has_visible_cone(current_snapshot, time.time())
         cone_prob = current_snapshot["cone_probability"]

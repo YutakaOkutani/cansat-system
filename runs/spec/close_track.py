@@ -95,7 +95,7 @@ class CloseTrackTest(unittest.TestCase):
                 self.assertTrue(s['cone_close_track']['hold'])
 
     def test_live_heading_range_and_camera_age_rechecked_between_frames(self):
-        for change in ({'angle': 120}, {'heading_travel_deg': 30},
+        for change in ({'angle': 120},
                        {'sonar_valid': False}, {'sonar_observed_monotonic': 99},
                        {'angle_valid': False}, {'cone_updated_at': 99}):
             st = self.state()
@@ -151,7 +151,7 @@ class CloseTrackTest(unittest.TestCase):
                 now = 100.4 + i * 0.4
                 s = observe(ctrl.st, now, clipped=True, valid=False, sonar_valid=False)
                 run_phase(handler, ctrl, now)
-                self.assertEqual(ctrl.st.snapshot()['phase'], phase)
+                self.assertEqual(ctrl.st.snapshot()['phase'], 6)
                 m = Motor()
                 getattr(m, drive)(s)
                 self.assertEqual(m.commands, ['stop'])
@@ -189,7 +189,7 @@ class CloseTrackTest(unittest.TestCase):
                     self.assertTrue(s['cone_close_track']['hold'])
                     self.assertTrue(goal_evidence(s, now, now)[0])
 
-    def test_brief_invalid_sensor_between_frames_revokes_identity(self):
+    def test_brief_invalid_sensor_pauses_then_recovers_identity(self):
         for sensor in ('heading', 'range'):
             st = self.state()
             acquired(st)
@@ -198,8 +198,9 @@ class CloseTrackTest(unittest.TestCase):
                 st.update_imu(angle_valid=False)
             else:
                 st.update_sonar(sonar_valid=False)
+            self.assertFalse(goal_evidence(st.snapshot(), 101.2, 101.2)[0])
             s = observe(st, 101.6, clipped=True, probability=0.98)
-            self.assertFalse(goal_evidence(s, 101.6, 101.6)[0])
+            self.assertTrue(goal_evidence(s, 101.6, 101.6)[0])
             self.assertTrue(s['cone_close_track']['hold'])
 
     def test_continuation_above_three_cm_uses_bounded_p6_pulse_and_live_interlock(self):
@@ -209,12 +210,15 @@ class CloseTrackTest(unittest.TestCase):
         run_phase(Phase6Handler(), ctrl, 101.2)
         observe(ctrl.st, 101.6, clipped=True, distance=5)
         run_phase(Phase6Handler(), ctrl, 101.6)
+        self.assertEqual(ctrl.phase6_motion_until, 0)
+        observe(ctrl.st, 101.7, clipped=True, distance=5)
+        run_phase(Phase6Handler(), ctrl, 101.7)
         self.assertEqual(ctrl.phase6_stage, 'move')
-        self.assertLessEqual(ctrl.phase6_motion_until, 101.75)
+        self.assertLessEqual(ctrl.phase6_motion_until, 101.76)
         self.assertEqual(ctrl.mission_end_reason, 'RUNNING')
         m = Motor()
         m.phase6_motion_until = ctrl.phase6_motion_until
-        with patch('time.time', return_value=101.6), patch('time.monotonic', return_value=101.6):
+        with patch('time.time', return_value=101.7), patch('time.monotonic', return_value=101.7):
             m._drive_phase6_approach(ctrl.st.snapshot())
             self.assertEqual(m.commands[-1], 'phase6_range_approach')
             ctrl.st.update_imu(angle_valid=False)

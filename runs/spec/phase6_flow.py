@@ -78,6 +78,9 @@ class Phase6FlowTest(unittest.TestCase):
         execute(ctrl, 100)
         ctrl.observe(100.4, distance=5)
         execute(ctrl, 100.4)
+        self.assertEqual(ctrl.phase6_motion_until, 0)
+        ctrl.observe(100.6, distance=5)
+        execute(ctrl, 100.6)
         self.assertEqual(ctrl.phase6_stage, 'move')
         self.assertEqual(ctrl.mission_end_reason, 'RUNNING')
 
@@ -98,10 +101,12 @@ class Phase6FlowTest(unittest.TestCase):
         execute(ctrl, 100)
         ctrl.observe(100.4, distance=30)
         execute(ctrl, 100.4)
-        self.assertGreater(ctrl.phase6_motion_until, 100.4)
-        self.assertLess(ctrl.phase6_motion_until, 100.6)
-        ctrl.observe(100.6, distance=28)
-        execute(ctrl, 100.6)
+        ctrl.observe(100.8, distance=30)
+        execute(ctrl, 100.8)
+        self.assertGreater(ctrl.phase6_motion_until, 100.8)
+        self.assertLess(ctrl.phase6_motion_until, 101)
+        ctrl.observe(101, distance=28)
+        execute(ctrl, 101)
         self.assertEqual(ctrl.phase6_motion_until, 0)
         self.assertEqual(ctrl.mission_end_reason, 'RUNNING')
 
@@ -111,8 +116,11 @@ class Phase6FlowTest(unittest.TestCase):
         execute(ctrl, 100)
         ctrl.observe(100.4, distance=30)
         execute(ctrl, 100.4)
-        ctrl.observe(100.45, distance=GOAL_STOP_DISTANCE_CM)
-        execute(ctrl, 100.45)
+        ctrl.observe(100.6, distance=30)
+        execute(ctrl, 100.6)
+        self.assertGreater(ctrl.phase6_motion_until, 100.6)
+        ctrl.observe(100.65, distance=GOAL_STOP_DISTANCE_CM)
+        execute(ctrl, 100.65)
         self.assertEqual(ctrl.phase6_motion_until, 0)
         self.assertEqual(ctrl.goal_confirm_count, 0)
 
@@ -135,7 +143,10 @@ class Phase6FlowTest(unittest.TestCase):
                 self.assertEqual(ctrl.goal_confirm_count, 0)
                 execute(ctrl, 104)
                 self.assertEqual(ctrl.mission_end_reason, 'RUNNING')
-                self.assertEqual(ctrl.st.snapshot()['phase'], int(Phase.PHASE5))
+                self.assertEqual(ctrl.st.snapshot()['phase'], int(Phase.PHASE6))
+                execute(ctrl, 107)
+                self.assertEqual(ctrl.mission_end_reason, 'GOAL_CAMERA_TIMEOUT')
+                self.assertEqual(ctrl.st.snapshot()['phase'], int(Phase.PHASE7))
 
     def test_timeout_is_not_success(self):
         for global_timeout in (False, True):
@@ -144,7 +155,7 @@ class Phase6FlowTest(unittest.TestCase):
             execute(ctrl, 100)
             ctrl.mission_total_timeout_triggered = global_timeout
             execute(ctrl, 100 + PHASE6_APPROACH_TIMEOUT_SEC)
-            self.assertEqual(ctrl.mission_end_reason, 'MISSION_TOTAL_TIMEOUT' if global_timeout else 'RUNNING')
+            self.assertEqual(ctrl.mission_end_reason, 'MISSION_TOTAL_TIMEOUT' if global_timeout else 'GOAL_APPROACH_TIMEOUT')
             self.assertEqual(ctrl.phase6_motion_until, 0)
 
     def test_old_before_stop_frame_is_not_confirmation(self):

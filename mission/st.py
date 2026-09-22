@@ -10,7 +10,7 @@ from mission.const import (
     DEFAULT_SONAR_DIST_CM,
     DEFAULT_PHASE,
     DEFAULT_VECTOR3,
-    SONAR_STALE_TIMEOUT_SEC,
+    SONAR_STALE_TIMEOUT_SEC, GOAL_SETTLE_HEADING_DEG,
 )
 
 
@@ -48,6 +48,7 @@ class CanSatState:
         self.angle_valid = False
         self.angle_observed_monotonic = 0.0
         self.heading_travel_deg = 0.0
+        self.angle_motion_monotonic = 0.0
         self._close_tracker = CloseConeTrack()
         self.cone_close_track = dict(self._close_tracker.result)
         self.direction = DEFAULT_FLOAT_VALUE
@@ -85,14 +86,21 @@ class CanSatState:
                 self.fall = fall
             if angle is not None:
                 if self.angle_valid:
-                    self.heading_travel_deg += heading_delta(float(angle), float(self.angle))
+                    excursion = heading_delta(float(angle), float(self.angle))
+                    self.heading_travel_deg += excursion
+                    if excursion > GOAL_SETTLE_HEADING_DEG:
+                        self.angle_motion_monotonic = time.monotonic()
                 self.angle = angle
                 self.angle_observed_monotonic = time.monotonic()
             if angle_valid is not None:
                 self.angle_valid = angle_valid
                 if not angle_valid:
-                    self._close_tracker.invalidate('heading_invalid')
+                    self._close_tracker.suspend('heading_invalid')
                     self._publish_close_track()
+
+            if self.angle_valid:
+                self._close_tracker.observe_heading(self.__dict__)
+                self._publish_close_track()
 
     def update_gps(
         self,
@@ -278,7 +286,7 @@ class CanSatState:
             if sonar_valid is not None:
                 self.sonar_valid = bool(sonar_valid)
                 if not sonar_valid and self._close_tracker.hold:
-                    self._close_tracker.invalidate('range_invalid')
+                    self._close_tracker.suspend('range_invalid')
                     self._publish_close_track()
             if sonar_stale_sec is not None:
                 self.sonar_stale_sec = float(sonar_stale_sec)
@@ -317,6 +325,7 @@ class CanSatState:
                 "angle_valid": self.angle_valid,
                 "angle_observed_monotonic": self.angle_observed_monotonic,
                 "heading_travel_deg": self.heading_travel_deg,
+                "angle_motion_monotonic": self.angle_motion_monotonic,
                 "cone_close_track": dict(self.cone_close_track),
                 "direction": self.direction,
                 "fall": self.fall,

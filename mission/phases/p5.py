@@ -27,7 +27,7 @@ from mission.const import (
     TIMEOUT_PHASE_5,
 )
 from mission.cone_candidate import camera_has_visible_cone, cone_centered_for_final_approach, evaluate_cone_candidate
-from mission.goal import goal_evidence
+from mission.goal import final_entry_evidence
 from mission.nav import calc_distance_and_azimuth
 from mission.phases.base import BasePhaseHandler
 
@@ -140,7 +140,7 @@ class Phase5Handler(BasePhaseHandler):
         evidence = evaluate_cone_candidate(current_snapshot)
         centered = cone_centered_for_final_approach(current_snapshot)
         controller.cone_phase_centered = bool(camera_fresh and centered)
-        is_reach_effective, goal_reason, goal_distance = goal_evidence(
+        is_reach_effective, goal_reason, goal_distance = final_entry_evidence(
             current_snapshot, now, time.monotonic()
         )
         controller.goal_decision = goal_reason
@@ -151,19 +151,22 @@ class Phase5Handler(BasePhaseHandler):
             controller.stop_motors()
             controller.count_cone_lost = 0
             controller.cone_phase_decision = 'p5_close_track_observe'
-            if goal_reason != 'observations_not_aligned':
-                controller.phase5_reach_confirm_count = 0
-                controller.phase5_goal_distance = None
-                controller.goal_confirm_count = 0
-                controller.cone_phase_confirm_count = 0
+            # P6 owns the finite stopped recovery window; never resume search
+            # merely because a close cone has become clipped or ambiguous.
+            controller.phase6_motion_until = 0.0
+            controller.st.update_navigation(phase=int(Phase.PHASE6))
             return
-        # Keep tracking/waiting for range recovery until the mission deadline.
+        # Transfer a visual-close range failure to the bounded P6 recovery window.
         # The motor interlock holds position when the cone is visually close.
         if camera_fresh and evidence["close_reached"] and not is_reach_effective:
             if getattr(controller, "phase5_goal_wait_since", None) is None:
                 controller.phase5_goal_wait_since = time.monotonic()
             if time.monotonic() - controller.phase5_goal_wait_since >= GOAL_OBSERVATION_TIMEOUT_SEC:
-                controller.goal_decision = "waiting_for_range_recovery"
+                controller.goal_decision = "bounded_range_recovery"
+                controller.phase6_motion_until = 0.0
+                controller.stop_motors()
+                controller.st.update_navigation(phase=int(Phase.PHASE6))
+                return
         else:
             controller.phase5_goal_wait_since = None
         waiting_for_image = (

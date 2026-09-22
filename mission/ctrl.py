@@ -292,7 +292,9 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
 
     def _resolve_phase7_arrival_reason(self):
         reason = str(getattr(self, "mission_end_reason", "RUNNING"))
-        if reason in {"GOAL_PROXIMITY_CONFIRMED", "GOAL_APPROACH_TIMEOUT", "GOAL_OBSERVATION_LOST", "GOAL_RANGE_UNCONFIRMED"}:
+        if reason in {"GOAL_PROXIMITY_CONFIRMED", "GOAL_APPROACH_TIMEOUT", "GOAL_OBSERVATION_LOST", "GOAL_RANGE_UNCONFIRMED",
+                      "GOAL_PROXIMITY_UNCONFIRMED", "GOAL_CAMERA_TIMEOUT",
+                      "GOAL_MOTION_LIMIT", "GOAL_NO_PROGRESS"}:
             return reason
         if reason == "GOAL_REACHED":
             return "GOAL_REACHED"

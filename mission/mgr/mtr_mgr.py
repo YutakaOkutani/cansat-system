@@ -1,9 +1,9 @@
 import math
 import time
 
-from mission.goal import goal_evidence
+from mission.goal import goal_evidence, final_entry_evidence, alignment_evidence
 from mission.const import (
-    GOAL_STOP_DISTANCE_CM,
+    GOAL_STOP_DISTANCE_CM, GOAL_CENTER_TOLERANCE,
     PHASE6_APPROACH_SPEED,
     PHASE6_APPROACH_RAMP_TIME,
     APPROACH_TURN_GAIN,
@@ -976,7 +976,7 @@ class MotorManager:
         if not self._camera_observation_fresh(snapshot, now):
             self.stop_motors()
             return
-        matched, _, _ = goal_evidence(snapshot, now, time.monotonic())
+        matched, _, _ = final_entry_evidence(snapshot, now, time.monotonic())
         if matched:
             self.stop_motors()
             return
@@ -1048,12 +1048,25 @@ class MotorManager:
 
     def _drive_phase6_approach(self, snapshot):
         now = time.monotonic()
-        matched, _, distance = goal_evidence(snapshot, time.time(), now)
+        action = getattr(self, 'phase6_action', 'forward')
+        matched, _, distance = (alignment_evidence(snapshot, time.time(), now)
+                                if action in ('left', 'right') else
+                                goal_evidence(snapshot, time.time(), now))
+        if action in ('left', 'right'):
+            direction = snapshot.get('cone_direction', 0.5)
+            matched = matched and (direction < 0.5 - GOAL_CENTER_TOLERANCE if action == 'left'
+                                   else direction > 0.5 + GOAL_CENTER_TOLERANCE)
         if (self._shutdown_active()
                 or bool(getattr(self, "mission_total_timeout_triggered", False))
                 or now >= float(getattr(self, "phase6_motion_until", 0.0))
+                or snapshot.get('angle_motion_monotonic', 0) > getattr(self, 'phase6_motion_started', now)
                 or not matched or distance <= GOAL_STOP_DISTANCE_CM):
             self.stop_motors()
+            return
+        if action in ('left', 'right'):
+            self._set_forward_pivot_turn(action, PHASE6_APPROACH_SPEED,
+                                         'phase6_align_' + action,
+                                         ramp_time=PHASE6_APPROACH_RAMP_TIME)
             return
         self.set_motors(
             PHASE6_APPROACH_SPEED, True, PHASE6_APPROACH_SPEED, True,

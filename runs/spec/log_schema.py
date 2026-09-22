@@ -52,6 +52,16 @@ class _LogOnlyController(SensorManager):
 
 
 class LogSchemaTest(unittest.TestCase):
+    def test_final_approach_failure_reasons_are_serialized_without_success(self):
+        for reason in ('GOAL_CAMERA_TIMEOUT', 'GOAL_PROXIMITY_UNCONFIRMED',
+                       'GOAL_MOTION_LIMIT', 'GOAL_NO_PROGRESS'):
+            ctrl = _LogOnlyController()
+            ctrl.mission_end_reason = reason
+            ctrl.phase7_arrival_reason = reason
+            row = dict(zip(LOG_HEADER, ctrl._build_log_row()))
+            self.assertEqual(row['MissionEndReason'], reason)
+            self.assertEqual(row['Phase7ArrivalReason'], reason)
+
     def test_log_worker_does_not_write_after_shutdown(self):
         ctrl = _LogOnlyController()
         ctrl._shutdown_requested = True

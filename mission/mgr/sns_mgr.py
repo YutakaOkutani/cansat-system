@@ -517,7 +517,10 @@ class SensorManager:
         )
         try:
             if hasattr(self, "_release_camera_detector"):
-                self._release_camera_detector()
+                if self._release_camera_detector() is False:
+                    return False
+            if getattr(self, '_shutdown_requested', False):
+                return False
             detector = dc.detector()
             roi_reference = getattr(self, "roi_references", None)
             if not roi_reference:
@@ -1129,6 +1132,10 @@ class SensorManager:
             try:
                 current_phase = self.st.snapshot()["phase"]
                 if self._sync_camera_runtime_for_phase(current_phase):
+                    if getattr(self, 'camera_recovery_requested', False):
+                        self.camera_recovery_requested = False
+                        self._begin_camera_recovery()
+                        self._try_reinit_camera(force=True, reason='final_approach_frame_stall')
                     t_start = time.time()
                     self.cone_detect()
                     elapsed = time.time() - t_start
