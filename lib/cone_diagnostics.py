@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 
-CONE_DIAGNOSTIC_SCHEMA_VERSION = 4
+CONE_DIAGNOSTIC_SCHEMA_VERSION = 5
 
 # key, mission CSV column, default, value kind
 CONE_DIAGNOSTIC_FIELDS = (
@@ -63,6 +63,10 @@ CONE_DIAGNOSTIC_FIELDS = (
     ("swap_probability", "ConeSwapProb", 0.0, "float"),
     ("swap_used", "ConeSwapUsed", 0, "int"),
     ("swap_margin", "ConeSwapMargin", 0.0, "float"),
+    ("close_track_reason", "ConeCloseTrackReason", "inactive", "str"),
+    ("close_track_count", "ConeCloseTrackCount", 0, "int"),
+    ("close_track_eligible", "ConeCloseTrackEligible", 0, "int"),
+    ("close_track_hold", "ConeCloseTrackHold", 0, "int"),
 )
 
 CONE_DIAGNOSTIC_KEYS = tuple(field[0] for field in CONE_DIAGNOSTIC_FIELDS)

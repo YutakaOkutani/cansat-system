@@ -2,6 +2,7 @@ import threading
 import time
 
 from lib.cone_diagnostics import normalize_cone_diagnostics
+from mission.close_track import CloseConeTrack, heading_delta
 
 from mission.const import (
     CONE_CENTER_POSITION,
@@ -45,6 +46,10 @@ class CanSatState:
         self.azimuth = DEFAULT_FLOAT_VALUE
         self.angle = DEFAULT_FLOAT_VALUE
         self.angle_valid = False
+        self.angle_observed_monotonic = 0.0
+        self.heading_travel_deg = 0.0
+        self._close_tracker = CloseConeTrack()
+        self.cone_close_track = dict(self._close_tracker.result)
         self.direction = DEFAULT_FLOAT_VALUE
         self.fall = DEFAULT_FLOAT_VALUE
         self.cone_direction = CONE_CENTER_POSITION
@@ -79,9 +84,15 @@ class CanSatState:
             if fall is not None:
                 self.fall = fall
             if angle is not None:
+                if self.angle_valid:
+                    self.heading_travel_deg += heading_delta(float(angle), float(self.angle))
                 self.angle = angle
+                self.angle_observed_monotonic = time.monotonic()
             if angle_valid is not None:
                 self.angle_valid = angle_valid
+                if not angle_valid:
+                    self._close_tracker.invalidate('heading_invalid')
+                    self._publish_close_track()
 
     def update_gps(
         self,
@@ -154,6 +165,9 @@ class CanSatState:
                 self.direction = direction
             if phase is not None:
                 self.phase = phase
+                if int(phase) not in (4, 5, 6):
+                    self._close_tracker.reset()
+                    self._publish_close_track()
             if nav_heading is not None:
                 self.nav_heading = nav_heading
             if nav_heading_source is not None:
@@ -234,6 +248,21 @@ class CanSatState:
                     }
                 )
             self.cone_debug = normalize_cone_diagnostics(diagnostics)
+            if observation_accepted or cone_valid is False:
+                # Publication is atomic with the frame and uses the same live
+                # range/heading snapshot for every phase and motor consumer.
+                self._close_tracker.update(self.__dict__, time.time(), time.monotonic())
+                self._publish_close_track()
+
+    def _publish_close_track(self):
+        """Caller holds self.lock; keep snapshot and CSV evidence in sync."""
+        self.cone_close_track = dict(self._close_tracker.result)
+        self.cone_debug.update({
+            'close_track_reason': self.cone_close_track['reason'],
+            'close_track_count': self.cone_close_track['count'],
+            'close_track_eligible': int(self.cone_close_track['eligible']),
+            'close_track_hold': int(self.cone_close_track['hold']),
+        })
 
     def update_sonar(self, sonar_distance_cm=None, sonar_valid=None, sonar_stale_sec=None,
                      sonar_sequence=None, sonar_observed_at=None, sonar_observed_monotonic=None):
@@ -248,6 +277,9 @@ class CanSatState:
                 self.sonar_distance_cm = sonar_distance_cm
             if sonar_valid is not None:
                 self.sonar_valid = bool(sonar_valid)
+                if not sonar_valid and self._close_tracker.hold:
+                    self._close_tracker.invalidate('range_invalid')
+                    self._publish_close_track()
             if sonar_stale_sec is not None:
                 self.sonar_stale_sec = float(sonar_stale_sec)
 
@@ -283,6 +315,9 @@ class CanSatState:
                 "azimuth": self.azimuth,
                 "angle": self.angle,
                 "angle_valid": self.angle_valid,
+                "angle_observed_monotonic": self.angle_observed_monotonic,
+                "heading_travel_deg": self.heading_travel_deg,
+                "cone_close_track": dict(self.cone_close_track),
                 "direction": self.direction,
                 "fall": self.fall,
                 "cone_direction": self.cone_direction,

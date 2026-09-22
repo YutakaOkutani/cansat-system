@@ -171,6 +171,9 @@ def build_mission_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "ConeIsReached",
         "ConeRawReached",
         "ConeCloseReachedOK",
+        "ConeCloseTrackCount",
+        "ConeCloseTrackEligible",
+        "ConeCloseTrackHold",
         "ConeRawProb",
         "ConeCandidateProb",
         "ConePreFilterProb",
@@ -197,6 +200,7 @@ def build_mission_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "ConePenaltyFlags",
         "ConeStrictRedRejectReason",
         "ConeCloseReachedRejectReason",
+        "ConeCloseTrackReason",
         "ConePhaseDecision",
     ):
         if col not in result.columns:
@@ -873,6 +877,10 @@ def analyze_explorer_log(
             "ConeStrictRedOK",
             "ConeStrictRedRejectReason",
             "ConeCloseReachedRejectReason",
+            "ConeCloseTrackReason",
+            "ConeCloseTrackCount",
+            "ConeCloseTrackEligible",
+            "ConeCloseTrackHold",
             "ConePenaltyFlags",
             "ConePhaseDecision",
             "ConePhaseReachedEffective",

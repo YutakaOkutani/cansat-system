@@ -70,7 +70,7 @@ class LogSchemaTest(unittest.TestCase):
         self.assertEqual(len(row), len(LOG_HEADER))
         self.assertEqual(len(LOG_HEADER), len(set(LOG_HEADER)))
         by_name = dict(zip(LOG_HEADER, row))
-        self.assertEqual(by_name["LogSchemaVersion"], 2)
+        self.assertEqual(by_name["LogSchemaVersion"], 3)
         self.assertEqual(by_name["RunId"], "test-run")
 
     def test_cone_diagnostics_are_written_with_freshness_and_gate_context(self):
@@ -121,7 +121,10 @@ class LogSchemaTest(unittest.TestCase):
             row = ctrl._build_log_row()
         by_name = dict(zip(LOG_HEADER, row))
 
-        self.assertEqual(by_name["ConeDiagSchemaVersion"], 4)
+        self.assertEqual(by_name["ConeDiagSchemaVersion"], 5)
+        self.assertEqual(by_name["ConeCloseTrackReason"], "inactive")
+        self.assertEqual(by_name["ConeCloseTrackEligible"], 0)
+        self.assertEqual(by_name["ConeCloseTrackHold"], 0)
         self.assertIn("ConeROIAbsoluteSupport", by_name)
         self.assertIn("ConeROINegativeSupport", by_name)
         self.assertEqual(by_name["ConeValid"], 1)

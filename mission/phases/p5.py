@@ -106,6 +106,7 @@ class Phase5Handler(BasePhaseHandler):
                 led_green.on()
 
         current_snapshot = controller.st.snapshot()
+        close_hold = current_snapshot.get('cone_close_track', {}).get('hold', False)
         visible_cone = camera_has_visible_cone(current_snapshot, time.time())
         if (
             hasattr(controller, "target_lat")
@@ -123,6 +124,7 @@ class Phase5Handler(BasePhaseHandler):
                 dist_m > GPS_PHASE45_MAX_DISTANCE
                 and not getattr(controller, "phase3_arrived_latched", False)
                 and not visible_cone
+                and not close_hold
             ):
                 self._fallback_to_p3(
                     controller,
@@ -142,7 +144,19 @@ class Phase5Handler(BasePhaseHandler):
             current_snapshot, now, time.monotonic()
         )
         controller.goal_decision = goal_reason
+        if goal_reason == 'close_track_camera_sonar_matched':
+            controller.cone_phase_centered = True
         controller.goal_confirm_count = int(getattr(controller, "phase5_reach_confirm_count", 0))
+        if close_hold and not is_reach_effective:
+            controller.stop_motors()
+            controller.count_cone_lost = 0
+            controller.cone_phase_decision = 'p5_close_track_observe'
+            if goal_reason != 'observations_not_aligned':
+                controller.phase5_reach_confirm_count = 0
+                controller.phase5_goal_distance = None
+                controller.goal_confirm_count = 0
+                controller.cone_phase_confirm_count = 0
+            return
         # Keep tracking/waiting for range recovery until the mission deadline.
         # The motor interlock holds position when the cone is visually close.
         if camera_fresh and evidence["close_reached"] and not is_reach_effective:
@@ -167,6 +181,7 @@ class Phase5Handler(BasePhaseHandler):
                 cone_prob > CONE_PROBABILITY_THRESHOLD_PHASE5
                 or weak_detect
                 or evidence["close_reached"]
+                or (close_hold and is_reach_effective)
             )
         )
         controller.cone_phase_detected = bool(is_det)

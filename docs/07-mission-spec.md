@@ -58,6 +58,12 @@ Current numeric thresholds, pins, speeds, and budgets are authoritative in `miss
 
 ## Phase 4/5 invariants
 
+- For a cone already identified in three distinct, temporally consistent, non-full-width frames, a clipped close view may retain identity for at most six seconds. This does not raise the detector probability or establish a new identity from a red screen.
+- Continuation requires a recent centered observation, fresh heading and near range (2–15 cm), continuous color/region evidence, and no more than 10 degrees of cumulative heading travel since centering. The frame and range must remain time-aligned. A strong clipped candidate can establish centering only after identity acquisition; it cannot refresh an existing clipped centering anchor.
+- A fresh frame-filling object with valid near range latches a stop across P4/P5/P6. P4/P5 observe instead of resuming a search arc on visual loss, invalid sensors, or history expiry. The hold survives until exit from these phases; ordinary valid goal evidence can still advance the mission. The global mission deadline remains authoritative.
+- A qualified clipped track can enter P6 through the existing two camera/range confirmations. Only P6 can command the existing bounded final pulses; it rechecks the same evidence in the motor thread. Success still requires three distinct stopped confirmations at 2–3 cm. Identity expiry or invalid evidence stops motion without declaring success.
+- CSV schema 3 / cone diagnostic schema 5 adds `ConeCloseTrackReason`, `ConeCloseTrackCount`, `ConeCloseTrackEligible`, and `ConeCloseTrackHold`. Eligibility is the last published frame decision; consumers additionally check live sensor freshness and the history deadline. Older CSVs lack these fields and remain readable.
+
 - Keep detector acquisition/normalization in the sensor/vision layer and mission interpretation in the Phase.
 - Require short-term consistency for P4 detection; a weak single frame must not transition.
 - A fresh visible cone overrides capture windows, local/cumulative P4/P5 timeouts, and GPS disagreement. Follow its current image position; resume search only after visual loss. The global mission deadline still stops the mission.

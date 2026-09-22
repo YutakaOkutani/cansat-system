@@ -34,6 +34,8 @@ from mission.const import (
     TIMEOUT_PHASE_4,
 )
 from mission.cone_candidate import camera_has_visible_cone, evaluate_cone_candidate
+from mission.goal import goal_evidence
+from mission.close_track import cropped_region
 from mission.nav import calc_distance_and_azimuth
 from mission.phases.base import BasePhaseHandler
 
@@ -272,6 +274,24 @@ class Phase4Handler(BasePhaseHandler):
             if recovery_started is None or float(recovery_started) < float(entry_marker):
                 controller.reset_camera_recovery_window()
         current_snapshot = controller.st.snapshot()
+        if (current_snapshot.get('cone_close_track', {}).get('hold')
+                and (cropped_region(current_snapshot)
+                     or not camera_has_visible_cone(current_snapshot, time.time()))):
+            controller.stop_motors()
+            matched, reason, _ = goal_evidence(current_snapshot, time.time(), time.monotonic())
+            controller.goal_decision = reason
+            controller.cone_phase_detected = matched
+            controller.cone_phase_reached_effective = matched
+            controller.cone_phase_centered = matched
+            controller.cone_phase_confirm_count = 0
+            controller.cone_phase_decision = 'p4_close_track_observe'
+            if matched:
+                controller.searching_flag = False
+                controller.phase5_entry_reason = 'phase4_close_track'
+                controller.phase5_last_processed_cone_seq = 0
+                controller.cone_phase_decision = 'p4_close_track_to_p5'
+                controller.st.update_navigation(phase=int(Phase.PHASE5))
+            return
         visible_cone = camera_has_visible_cone(current_snapshot, time.time())
         cone_prob = current_snapshot["cone_probability"]
         cone_dir = current_snapshot.get("cone_direction", CONE_CENTER_POSITION)

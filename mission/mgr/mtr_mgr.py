@@ -899,6 +899,9 @@ class MotorManager:
     def _drive_phase4_camera(self, snapshot):
         """Apply one production Phase4 search/alignment motor decision."""
         now = time.time()
+        if snapshot.get('cone_close_track', {}).get('hold'):
+            self.stop_motors()
+            return
         if not self._camera_observation_fresh(snapshot, now):
             self.stop_motors()
             return
@@ -967,6 +970,9 @@ class MotorManager:
     def _drive_phase5_camera(self, snapshot):
         """Apply one production Phase5 visual-approach motor decision."""
         now = time.time()
+        if snapshot.get('cone_close_track', {}).get('hold'):
+            self.stop_motors()
+            return
         if not self._camera_observation_fresh(snapshot, now):
             self.stop_motors()
             return

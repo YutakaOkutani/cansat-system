@@ -466,6 +466,15 @@ def write_vision_diagnostics(df: pd.DataFrame, out_dir: Path) -> None:
     prob = num("ConeProb")
     masks = [
         (
+            "close_track_continuation",
+            (num("ConeCloseTrackEligible") > 0) & phase.isin([4, 5, 6]),
+        ),
+        (
+            "close_track_hold_unconfirmed",
+            (num("ConeCloseTrackHold") > 0) & (num("ConeCloseTrackEligible") <= 0)
+            & phase.isin([4, 5, 6]),
+        ),
+        (
             "reached_rejected_by_phase_gate",
             (num("ConeIsReached") > 0) & (num("ConePhaseReachedEffective") <= 0) & phase.isin([4, 5]),
         ),
@@ -508,6 +517,10 @@ def write_vision_diagnostics(df: pd.DataFrame, out_dir: Path) -> None:
             "ConeStrictRedOK",
             "ConeStrictRedRejectReason",
             "ConeCloseReachedRejectReason",
+            "ConeCloseTrackReason",
+            "ConeCloseTrackCount",
+            "ConeCloseTrackEligible",
+            "ConeCloseTrackHold",
             "ConePenaltyFlags",
             "ConePhaseDecision",
             "ConePhaseReachedEffective",
