@@ -13,6 +13,8 @@ from lib import bmp180, bno055
 from lib.sonar import SonarSensor
 from lib import cone_detect as dc
 
+from mission.diagnostics import lifecycle
+
 from mission.const import (
     CAMERA_CLOSE_TIMEOUT_SEC,
     BNO_FUSION_OK_STATES,
@@ -50,20 +52,29 @@ from mission.paths import ROI_PRIMARY_REFERENCE
 class HardwareManager:
     def close_hardware(self):
         """Release GPIO/camera resources so subset runners can exit cleanly."""
-        self._release_camera_detector()
+        lifecycle(self, HardwareCloseDevice='camera')
+        self._write_final_log_row()
+        camera_closed = self._release_camera_detector()
+        if camera_closed is False:
+            lifecycle(self, ShutdownError='camera_close_timeout')
         closed_ids = set()
         for key, device in list(self.devices.items()):
             if device is None or id(device) in closed_ids:
                 continue
             closed_ids.add(id(device))
+            lifecycle(self, HardwareCloseDevice=str(key))
+            self._write_final_log_row()
             try:
                 close_fn = getattr(device, "close", None)
                 if callable(close_fn):
                     close_fn()
             except Exception as exc:
-                print(f"Hardware close error ({key}): {exc}")
+                lifecycle(self, ShutdownError='device_close:' + str(key) + ':' + type(exc).__name__)
+                print(f"Hardware close error ({key}): {exc}", flush=True)
             finally:
                 self.devices[key] = None
+
+        lifecycle(self, HardwareCloseDevice='', HardwareCloseCompleted=1)
 
     def _bno_has_live_sample(self, bno):
         try:

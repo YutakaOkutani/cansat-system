@@ -3,6 +3,8 @@ import time
 import csv
 import threading
 
+from mission.diagnostics import elapsed, lifecycle
+
 from mission.const import (
     CAMERA_CONTROL_INVERT_X,
     CAMERA_FRAME_STALE_STOP_SEC,
@@ -92,7 +94,9 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
         self.phase1_offset_subsegment_diff_deg = 0.0
         self.phase1_offset_reject_reason = ""
         self.phase0_entry_marker = None
-        self.phase0_initial_alt = None
+        self.phase0_max_altitude = None
+        self.phase0_current_altitude = None
+        self.phase0_altitude_drop = None
         self.phase0_drop_detect_time = None
         self.phase0_drop_detect_reason = None
         self.phase0_exit_reason = ""
@@ -237,6 +241,7 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
         self.mission_end_reason = "RUNNING"
         self.mission_total_timeout_triggered = False
         self._shutdown_requested = False
+        self._shutdown_started = False
         self.radio_control_mode = ""
         self.radio_disabled = False
         self.radio_simulated_disabled = False
@@ -256,33 +261,68 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
             Phase.PHASE7: Phase7Handler(),
         }
 
+    def _shutdown_checkpoint(self, stage, **changes):
+        lifecycle(self, ShutdownStage=stage, **changes)
+        print(f"Shutdown: {stage}; mission={self.mission_end_reason}", flush=True)
+        self._write_final_log_row()
+
+    def _record_interrupt(self):
+        previous = getattr(self, 'lifecycle_diagnostics', {})
+        lifecycle(self, InterruptCount=previous.get('InterruptCount', 0) + 1,
+                  InterruptPhase=self.st.snapshot().get('phase', ''),
+                  InterruptElapsedSec=elapsed(self, time.time()),
+                  InterruptStage=previous.get('ShutdownStage', 'not_requested'))
+        print("KeyboardInterrupt: operator requested stop", flush=True)
+
     def request_shutdown(self, reason="shutdown"):
-        if self._shutdown_requested:
+        if getattr(self, '_shutdown_started', False):
             return
+        self._shutdown_started = True
         self._shutdown_requested = True
+        arm = getattr(self, 'arm_process_exit_deadline', None)
+        if arm is not None:
+            arm()
+        lifecycle(self, ShutdownRequested=1, ShutdownReason=str(reason))
         if self.mission_end_reason == "RUNNING":
             self.mission_end_reason = reason
-        if self.phase7_arrival_reason == "RUNNING" and self.st.snapshot().get("phase") == int(Phase.PHASE7):
-            self.phase7_arrival_reason = self._resolve_phase7_arrival_reason()
+        if self.st.snapshot().get("phase") == int(Phase.PHASE7):
+            self._terminal_phase_reached = True
+            if self.phase7_arrival_reason == "RUNNING":
+                self.phase7_arrival_reason = self._resolve_phase7_arrival_reason()
+        try:
+            # Stop before synchronous diagnostic I/O or radio cleanup.
+            self.stop_motors(reason='shutdown')
+        except Exception as exc:
+            lifecycle(self, ShutdownError='motor_stop:' + type(exc).__name__)
+            print(f"Emergency stop failed: {exc}", flush=True)
+        recovery = getattr(self, 'recovery_store', None)
+        if recovery is not None:
+            try:
+                recovery.save(self, force=True)
+            except Exception as exc:
+                lifecycle(self, ShutdownError='recovery_save:' + type(exc).__name__)
+                print(f'Recovery checkpoint failed during shutdown: {exc}', flush=True)
+        self._shutdown_checkpoint('radio_restore')
         try:
             self.restore_mission_radio(f"shutdown_{reason}")
         except Exception as exc:
-            print(f"Radio restore on shutdown failed: {exc}")
-        try:
-            self.stop_motors()
-        except Exception as exc:
-            print(f"Emergency stop failed: {exc}")
+            lifecycle(self, ShutdownError='radio_restore:' + type(exc).__name__)
+            print(f"Radio restore on shutdown failed: {exc}", flush=True)
+        self._shutdown_checkpoint('hardware_close')
         try:
             self.close_hardware()
         except Exception as exc:
-            print(f"Hardware shutdown failed: {exc}")
-        self._write_final_log_row()
+            lifecycle(self, ShutdownError='hardware_close:' + type(exc).__name__)
+            print(f"Hardware shutdown failed: {exc}", flush=True)
+        self._shutdown_checkpoint('manifest_finalize')
         run_bundle = getattr(self, "run_bundle", None)
         if run_bundle is not None:
             try:
                 run_bundle.finalize(self.mission_end_reason)
             except Exception as exc:
-                print(f"Run manifest finalize failed: {exc}")
+                lifecycle(self, ShutdownError='manifest_finalize:' + type(exc).__name__)
+                print(f"Run manifest finalize failed: {exc}", flush=True)
+        self._shutdown_checkpoint('completed', ShutdownCompleted=1)
 
     def transition_to_give_up(self, reason):
         """Enter the safe terminal phase without passing through approach/final ram."""
@@ -328,7 +368,7 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
     def initialize_phase(self, phase):
         phase_enum = Phase(phase)
         now = time.time()
-        if phase_enum != Phase.PHASE0:
+        if phase_enum not in (Phase.PHASE0, Phase.PHASE7):
             self.restore_mission_radio(f"enter_{phase_enum.name.lower()}")
         if self.mission_start_time is None:
             self.mission_start_time = now
@@ -390,6 +430,8 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
         self.phase_elapsed_totals[phase] += max(0.0, now - self.phase_entry_time)
 
     def _handle_timeout_transitions(self, current_phase):
+        if current_phase == Phase.PHASE7:
+            return False
         now = time.time()
         if self.mission_start_time is None:
             self.mission_start_time = now
@@ -495,11 +537,25 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
             self.setup_hardware()
             self.signal_led(LED_SIGNAL_COUNT)
             self.prepare_mission_radio_control(start_phase)
+            if getattr(self, 'recovery_record', None) and start_phase != Phase.PHASE0:
+                # rfkill can outlive the old process; its in-memory flag cannot.
+                if self.radio_config.control == 'mission':
+                    self.radio_disabled = not self.radio_config.dry_run
+                    self.radio_simulated_disabled = self.radio_config.dry_run
+                    self.restore_mission_radio('resume_after_restart')
             self.initialize_phase(start_phase)
+            recovery = getattr(self, 'recovery_store', None)
+            if recovery is not None:
+                recovery.restore(self)
+                self._recovery_ready = True
+                recovery.save(self, force=True)
             allowed_set = None
             if allowed_phases is not None:
                 allowed_set = {Phase(value) for value in allowed_phases}
             while not self._shutdown_requested:
+                if self.st.snapshot()["phase"] == int(Phase.PHASE7):
+                    self._finish_terminal_phase()
+                    break
                 if allowed_set is not None:
                     # デバッグ実行では許可フェーズを抜けた時点で正常終了扱いにする。
                     current_phase = Phase(self.st.snapshot()["phase"])
@@ -508,27 +564,78 @@ class CanSatController(HardwareManager, SensorManager, MotorManager, LedManager,
                         self.request_shutdown("PHASE_SUBSET_COMPLETED")
                         return
                 self.loop_once()
-                time.sleep(MAIN_LOOP_INTERVAL)
+                if recovery is not None:
+                    recovery.save(self)
+                    self._recovery_starting = False
+                if not self._shutdown_requested:
+                    time.sleep(MAIN_LOOP_INTERVAL)
         except KeyboardInterrupt:
-            print("\nKeyboardInterrupt")
-            self.request_shutdown("KEYBOARD_INTERRUPT")
-            print("Emergency stop requested. Motors are stopping.")
+            self._record_interrupt()
+            try:
+                self.request_shutdown("KEYBOARD_INTERRUPT")
+            except KeyboardInterrupt:
+                self._record_interrupt()
+                raise
+            print("Mission loop ended after Ctrl+C", flush=True)
+        except Exception as exc:
+            lifecycle(self, RunExceptionType=type(exc).__name__)
+            raise
         finally:
-            self.request_shutdown("RUN_EXIT")
+            lifecycle(self, RunFinallyReached=1)
+            try:
+                self.request_shutdown("RUN_EXIT")
+            except KeyboardInterrupt:
+                self._record_interrupt()
+                raise
+            finally:
+                # Also persist Ctrl+C received after a terminal mission reason.
+                if hasattr(self, '_write_final_log_row'):
+                    self._write_final_log_row()
+
+    def _finish_terminal_phase(self):
+        """Phase7 always stops acquisition and exits, including LED failures."""
+        self._terminal_phase_reached = True
+        if getattr(self, '_shutdown_started', False):
+            return
+        self._shutdown_requested = True
+        arm = getattr(self, 'arm_process_exit_deadline', None)
+        if arm is not None:
+            arm()
+        if self.mission_end_reason == 'RUNNING':
+            self.mission_end_reason = 'PHASE7_EXIT'
+        lifecycle(self, ShutdownRequested=1, ShutdownReason=self.mission_end_reason,
+                  ShutdownStage='phase7_handler')
+        try:
+            recovery = getattr(self, 'recovery_store', None)
+            if recovery is not None:
+                self.stop_motors(reason='phase7_checkpoint')
+                recovery.save(self, force=True)
+            self.phase_handlers[Phase.PHASE7].execute(self, self.st.snapshot())
+        finally:
+            self.request_shutdown(self.mission_end_reason)
 
     def loop_once(self):
-        self.check_radio_failsafe()
         snapshot = self.st.snapshot()
         phase = Phase(snapshot["phase"])
+        if phase == Phase.PHASE7:
+            self._finish_terminal_phase()
+            return
+        self.check_radio_failsafe()
         self._sync_phase_time_tracking(phase)
         if self._handle_timeout_transitions(phase):
-            self.check_radio_failsafe()
+            if self.st.snapshot()["phase"] == int(Phase.PHASE7):
+                self._finish_terminal_phase()
+            else:
+                self.check_radio_failsafe()
             return
         self.led_blink_timer += 1
         handler = self.phase_handlers.get(phase)
         if handler is not None:
             handler.execute(self, snapshot)
             post_phase = Phase(self.st.snapshot()["phase"])
+            if post_phase == Phase.PHASE7:
+                self._finish_terminal_phase()
+                return
             if phase == Phase.PHASE0 and post_phase != Phase.PHASE0:
                 self.restore_mission_radio(f"phase0_to_{post_phase.name.lower()}")
             self._sync_phase_time_tracking(post_phase)

@@ -42,7 +42,7 @@ class _HeadingOnlyController(MotorManager):
     def set_motors(self, *args, **kwargs):
         self.motor_commands.append((args, kwargs))
 
-    def stop_motors(self):
+    def stop_motors(self, reason="unspecified"):
         self.motor_commands.append(((0.0, True, 0.0, True), {"cmd_type": "stop"}))
 
     def _normalize_heading_deg(self, value):

@@ -71,7 +71,8 @@ class Phase5Handler(BasePhaseHandler):
             print(f"p5 : approaching ({entry_reason}, timeout={timeout_limit:.1f}s)")
             controller.phase5_entry_marker = entry_marker
             controller.phase5_timeout_limit_sec = float(timeout_limit)
-            controller.time_camera_start = time.time()
+            controller.time_camera_start = time.time() - getattr(controller, 'phase5_resume_elapsed', 0.0)
+            controller.phase5_resume_elapsed = 0.0
             controller.count_cone_lost = 0
             controller.phase5_reach_confirm_count = 0
             controller.phase5_last_sonar_seq = 0
@@ -148,7 +149,7 @@ class Phase5Handler(BasePhaseHandler):
             controller.cone_phase_centered = True
         controller.goal_confirm_count = int(getattr(controller, "phase5_reach_confirm_count", 0))
         if close_hold and not is_reach_effective:
-            controller.stop_motors()
+            controller.stop_motors(reason='phase5:close_hold')
             controller.count_cone_lost = 0
             controller.cone_phase_decision = 'p5_close_track_observe'
             # P6 owns the finite stopped recovery window; never resume search

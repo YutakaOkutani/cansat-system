@@ -28,7 +28,7 @@ class Motor(motor.MotorManager):
         self.phase6_motion_until = 100.15
         self.commands = []
 
-    def stop_motors(self):
+    def stop_motors(self, reason="unspecified"):
         self.commands.append('stop')
 
     def set_motors(self, *args, **kwargs):
@@ -83,7 +83,7 @@ class GoalApproachTest(unittest.TestCase):
         from types import SimpleNamespace
         calls = []
         ctrl = SimpleNamespace(devices={}, mission_end_reason='GOAL_PROXIMITY_CONFIRMED',
-            stop_motors=lambda: calls.append('stop'),
+            stop_motors=lambda **_kwargs: calls.append('stop'),
             _resolve_phase7_arrival_reason=lambda: 'GOAL_PROXIMITY_CONFIRMED',
             request_shutdown=lambda reason: calls.append(reason))
         Phase7Handler().execute(ctrl, {})

@@ -106,6 +106,11 @@ class RunBundle:
             self._manifest["end_reason"] = str(reason)
             self._write_manifest()
 
+    def record_recovery(self, metadata) -> None:
+        with self._manifest_lock:
+            self._manifest['recovery'] = dict(metadata)
+            self._write_manifest()
+
 
 def create_run_bundle(mission_config, run_context, *, log_root=None, now=None) -> RunBundle:
     started_at = now or datetime.now().astimezone()

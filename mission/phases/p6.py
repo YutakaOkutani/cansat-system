@@ -7,6 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from mission.diagnostics import elapsed
 from mission.const import (
     DEVICE_LED_GREEN, DEVICE_LED_RED, GOAL_CONFIRM_SAMPLES,
     GOAL_OBSERVATION_TIMEOUT_SEC, GOAL_PULSE_SEC, GOAL_SETTLE_SEC,
@@ -25,10 +26,11 @@ class Phase6Handler(BasePhaseHandler):
     @staticmethod
     def _stop(controller):
         controller.phase6_motion_until = 0.0
-        controller.stop_motors()
+        controller.stop_motors(reason='phase6_stopped_observation')
 
     def _finish(self, controller, reason):
         self._stop(controller)
+        controller.phase6_gate = 'terminal'
         controller.mission_end_reason = reason
         controller.goal_decision = reason.lower()
         controller.st.update_navigation(phase=int(Phase.PHASE7))
@@ -62,6 +64,7 @@ class Phase6Handler(BasePhaseHandler):
         c.phase6_pulses += 1
         c.phase6_action = action
         c.phase6_stage = 'move'
+        c.phase6_gate = 'pulse_requested'
         duration = (GOAL_ALIGN_PULSE_SEC if action != 'forward' else
                     GOAL_NEAR_PULSE_SEC if distance <= GOAL_NEAR_PULSE_DISTANCE_CM else GOAL_PULSE_SEC)
         c.phase6_motion_started = now
@@ -69,16 +72,54 @@ class Phase6Handler(BasePhaseHandler):
         c.goal_decision = 'range_approach_pulse' if action == 'forward' else 'bounded_align_' + action
 
     def execute(self, controller, snapshot):
+        controller.phase6_gate = 'evaluating'
+        controller.phase6_evidence_matched = ''
+        controller.phase6_eval_snapshot = snapshot
+        try:
+            self._execute(controller, snapshot)
+        finally:
+            c = controller
+            now, wall = time.monotonic(), time.time()
+            used = c.phase6_eval_snapshot
+            c.phase6_diagnostics = {
+                'Phase6Stage': getattr(c, 'phase6_stage', 'inactive'),
+                'Phase6Action': getattr(c, 'phase6_action', ''),
+                'Phase6Gate': c.phase6_gate,
+                'Phase6ElapsedSec': round(now - getattr(c, 'phase6_start_time', now), 3),
+                'Phase6WaitSec': round(now - getattr(c, 'phase6_wait_since', now), 3),
+                'Phase6SettleRemainingSec': round(max(0, getattr(c, 'phase6_observe_after', now) - now), 3),
+                'Phase6PulseRequestedCount': getattr(c, 'phase6_pulses', 0),
+                'Phase6VoteCount': len(getattr(c, 'phase6_votes', [])),
+                'GoalEvalConeSeq': used.get('cone_sequence', 0),
+                'GoalEvalSonarSeq': used.get('sonar_sequence', 0),
+                'GoalEvalDistanceCm': used.get('sonar_distance_cm', ''),
+                'GoalEvalSampleSkewSec': round(abs(number(used, 'cone_updated_at', 0) - number(used, 'sonar_observed_at', 0)), 3),
+                'GoalEvalReason': getattr(c, 'goal_decision', ''),
+                'GoalEvalMatched': c.phase6_evidence_matched,
+                'GoalEvalConfirmCount': getattr(c, 'goal_confirm_count', 0),
+                'GoalEvalElapsedSec': elapsed(c, wall),
+            }
+            # A periodic heartbeat distinguishes waiting from a blocked loop.
+            if now - getattr(c, 'phase6_last_status_at', float('-inf')) >= 1.0 or c.phase6_gate == 'terminal':
+                c.phase6_last_status_at = now
+                print(f"p6: {c.phase6_gate}; evidence={getattr(c, 'goal_decision', '')}; "
+                      f"confirm={getattr(c, 'goal_confirm_count', 0)}/{GOAL_CONFIRM_SAMPLES}; "
+                      f"elapsed={c.phase6_diagnostics['Phase6ElapsedSec']:.1f}s/{PHASE6_APPROACH_TIMEOUT_SEC:.0f}s",
+                      flush=True)
+
+    def _execute(self, controller, snapshot):
         c = controller
         now, wall = time.monotonic(), time.time()
         marker = getattr(c, 'phase_entry_time', None)
         if not hasattr(c, 'phase6_stage') or getattr(c, 'phase6_entry_marker', None) != marker:
             self._settle(c, now)
             c.phase6_entry_marker = marker
-            c.phase6_start_time = now
+            c.phase6_start_time = now - getattr(c, 'phase6_resume_elapsed', 0.0)
+            c.phase6_resume_elapsed = 0.0
             c.phase6_last_pair = (0, 0)
             c.phase6_wait_since = now
-            c.phase6_pulses = 0
+            c.phase6_pulses = getattr(c, 'phase6_resume_pulses', 0)
+            c.phase6_resume_pulses = 0
             c.phase6_progress = []
             c.phase6_camera_recovery_requested = False
         for key in (DEVICE_LED_RED, DEVICE_LED_GREEN):
@@ -92,6 +133,7 @@ class Phase6Handler(BasePhaseHandler):
             return
 
         snapshot = c.st.snapshot()
+        c.phase6_eval_snapshot = snapshot
         camera_age = wall - number(snapshot, 'cone_updated_at', 0)
         # Independent of the acquisition worker: a blocked driver cannot keep
         # P6 alive indefinitely. Recovery is consumed by that worker if it returns.
@@ -113,9 +155,11 @@ class Phase6Handler(BasePhaseHandler):
                 matched = True
                 action = 'left' if snapshot['cone_direction'] < .5 else 'right'
         c.goal_decision = reason
+        c.phase6_evidence_matched = int(matched)
 
         if number(snapshot, 'angle_motion_monotonic', 0) > c.phase6_settle_started:
             self._settle(c, now)
+            c.phase6_gate = 'heading_settle'
             c.goal_decision = 'settling_after_heading_change'
             return
         if fresh_heading(snapshot, now):
@@ -123,12 +167,14 @@ class Phase6Handler(BasePhaseHandler):
             if c.phase6_heading is not None and heading_delta(heading, c.phase6_heading) > GOAL_SETTLE_HEADING_DEG:
                 self._settle(c, now)
                 c.phase6_heading = heading
+                c.phase6_gate = 'heading_settle'
                 c.goal_decision = 'settling_after_heading_change'
                 return
             if c.phase6_heading is None:
                 c.phase6_heading = heading
 
         if not matched:
+            c.phase6_gate = 'evidence_rejected'
             was_moving = c.phase6_stage == 'move'
             self._stop(c)
             c.phase6_far_count = 0
@@ -143,22 +189,28 @@ class Phase6Handler(BasePhaseHandler):
         if c.phase6_stage == 'move':
             if (now < c.phase6_motion_until and distance > GOAL_STOP_DISTANCE_CM
                     and action == c.phase6_action):
+                c.phase6_gate = 'pulse_active'
                 return
             self._settle(c, now)
+            c.phase6_gate = 'pulse_finished_settle'
             return
         self._stop(c)
         if now < c.phase6_observe_after:
+            c.phase6_gate = 'settle_wait'
             return
         if (number(snapshot, 'sonar_observed_monotonic') < c.phase6_observe_after
                 or camera_age < 0 or now - camera_age < c.phase6_observe_after):
+            c.phase6_gate = 'post_stop_sample_wait'
             return
         pair = (int(snapshot['cone_sequence']), int(snapshot['sonar_sequence']))
         previous = c.phase6_last_pair
         if pair[0] <= previous[0] or pair[1] <= previous[1]:
+            c.phase6_gate = 'new_pair_wait'
             return
         c.phase6_last_pair = pair
         c.phase6_wait_since = now
         if action != 'forward':
+            c.phase6_gate = 'alignment_confirm_wait'
             c.phase6_votes = []
             c.goal_confirm_count = 0
             c.phase6_far_count = 0
@@ -170,11 +222,13 @@ class Phase6Handler(BasePhaseHandler):
         c.phase6_align_count = 0
         if c.phase6_votes and abs(c.phase6_votes[-1][1] - distance) > GOAL_MAX_DISTANCE_SPREAD_CM:
             self._settle(c, now)
+            c.phase6_gate = 'range_jump_settle'
             c.goal_decision = 'settling_after_range_jump'
             return
         c.phase6_votes.append((now, distance))
         c.phase6_votes = c.phase6_votes[-GOAL_VOTE_WINDOW_SIZE:]
         c.goal_confirm_count = sum(d <= GOAL_STOP_DISTANCE_CM for _, d in c.phase6_votes)
+        c.phase6_gate = 'vote_accepted'
         c.goal_decision = 'stopped_proximity_confirm'
         if distance <= GOAL_STOP_DISTANCE_CM and c.goal_confirm_count >= GOAL_CONFIRM_SAMPLES:
             self._finish(c, 'GOAL_PROXIMITY_CONFIRMED')

@@ -8,15 +8,17 @@ if not MAIN_PY_LIBRARY_DIR.exists():
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from mission.diagnostics import lifecycle
 from mission.const import DEVICE_LED_GREEN, DEVICE_LED_RED, Phase
 from mission.phases.base import BasePhaseHandler
 
 
 class Phase7Handler(BasePhaseHandler):
     def execute(self, controller, snapshot):
+        lifecycle(controller, Phase7HandlerEntered=1)
         led_red = controller.devices.get(DEVICE_LED_RED)
         led_green = controller.devices.get(DEVICE_LED_GREEN)
-        controller.stop_motors()
+        controller.stop_motors(reason='phase7_terminal')
         mission_end_reason = getattr(controller, "mission_end_reason", "RUNNING")
         if mission_end_reason == "RUNNING":
             controller.mission_end_reason = "PHASE7_EXIT"
@@ -24,11 +26,12 @@ class Phase7Handler(BasePhaseHandler):
         controller.phase7_arrival_reason = controller._resolve_phase7_arrival_reason()
 
         if mission_end_reason == "GOAL_PROXIMITY_CONFIRMED" and not getattr(controller, "mission_total_timeout_triggered", False):
-            print("p7 : Goal proximity confirmed; physical contact is unverified")
+            print("p7 : Goal proximity confirmed; physical contact is unverified", flush=True)
             if led_red:
                 led_red.on()
             if led_green:
                 led_green.on()
+            lifecycle(controller, TerminalLEDCommand='red_green_on')
             controller.request_shutdown(mission_end_reason)
             return
 
@@ -38,14 +41,16 @@ class Phase7Handler(BasePhaseHandler):
         }
 
         if give_up:
-            print(f"p7 : Give up ({controller.phase7_arrival_reason})")
+            print(f"p7 : Give up ({controller.phase7_arrival_reason})", flush=True)
             controller.signal_give_up()
+            lifecycle(controller, TerminalLEDCommand='red_on_green_off')
         else:
-            print(f"p7 : Goal!! ({controller.phase7_arrival_reason})")
+            print(f"p7 : Goal!! ({controller.phase7_arrival_reason})", flush=True)
             if led_red:
                 led_red.on()
             if led_green:
                 led_green.on()
+            lifecycle(controller, TerminalLEDCommand='red_green_on')
         controller.request_shutdown(mission_end_reason)
 
 

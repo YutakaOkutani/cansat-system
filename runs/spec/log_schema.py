@@ -80,7 +80,7 @@ class LogSchemaTest(unittest.TestCase):
         self.assertEqual(len(row), len(LOG_HEADER))
         self.assertEqual(len(LOG_HEADER), len(set(LOG_HEADER)))
         by_name = dict(zip(LOG_HEADER, row))
-        self.assertEqual(by_name["LogSchemaVersion"], 3)
+        self.assertEqual(by_name["LogSchemaVersion"], 6)
         self.assertEqual(by_name["RunId"], "test-run")
 
     def test_cone_diagnostics_are_written_with_freshness_and_gate_context(self):
@@ -197,6 +197,17 @@ class LogSchemaTest(unittest.TestCase):
         self.assertEqual(by_name["SonarSeq"], 17)
         self.assertEqual(by_name["SonarObservedAt"], "1234.500")
         self.assertEqual(by_name["GoalDecision"], "inactive")
+
+    def test_phase0_altitude_columns_preserve_missing_and_values(self):
+        ctrl = _LogOnlyController()
+        columns = ("Phase0CurrentAltitude", "Phase0MaxAltitude", "Phase0AltitudeDrop")
+        row = dict(zip(LOG_HEADER, ctrl._build_log_row()))
+        self.assertEqual([row[c] for c in columns], ["", "", ""])
+        ctrl.phase0_current_altitude = 79.0
+        ctrl.phase0_max_altitude = 100.0
+        ctrl.phase0_altitude_drop = 21.0
+        row = dict(zip(LOG_HEADER, ctrl._build_log_row()))
+        self.assertEqual([row[c] for c in columns], ["79.00", "100.00", "21.00"])
 
     def test_phase0_exit_columns_are_written_to_log_row(self):
         ctrl = _LogOnlyController()

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from mission import const
+from mission.diagnostics import lifecycle
 from runs.spec.controller_exception_safety import CanSatController
 from runs.spec.camera_recovery import _CameraRecoveryController, sns_mgr_under_test
 
@@ -15,7 +16,7 @@ from runs.spec.camera_recovery import _CameraRecoveryController, sns_mgr_under_t
 source = Path(__file__).resolve().parents[2] / 'mission/mgr/hw_mgr.py'
 node = next(n for n in ast.parse(source.read_text()).body
             if isinstance(n, ast.ClassDef) and n.name == 'HardwareManager')
-namespace = dict(vars(const), threading=threading)
+namespace = dict(vars(const), threading=threading, lifecycle=lifecycle)
 exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), namespace)
 HardwareManager = namespace['HardwareManager']
 
@@ -26,6 +27,7 @@ class CameraShutdownTest(unittest.TestCase):
         detector = SimpleNamespace(close=lambda: gate.wait(2))
         c = HardwareManager()
         c.devices = {const.DEVICE_DETECTOR: detector}
+        c._shutdown_checkpoint = lambda stage, **kw: CanSatController._shutdown_checkpoint(c, stage, **kw)
         c._shutdown_requested = False
         c.mission_end_reason = 'GOAL_CAMERA_TIMEOUT'
         c.phase7_arrival_reason = 'RUNNING'
@@ -33,12 +35,15 @@ class CameraShutdownTest(unittest.TestCase):
         c._resolve_phase7_arrival_reason = lambda: c.mission_end_reason
         actions = []
         c.restore_mission_radio = lambda _: None
-        c.stop_motors = lambda: actions.append('stop')
+        c.stop_motors = lambda **_kwargs: actions.append('stop')
         c._write_final_log_row = lambda: actions.append('final_log')
         try:
             with patch.dict(namespace, CAMERA_CLOSE_TIMEOUT_SEC=.01):
                 CanSatController.request_shutdown(c, c.mission_end_reason)
-                self.assertEqual(actions, ['stop', 'final_log'])
+                self.assertEqual(actions[0], 'stop')
+                self.assertEqual(actions[-1], 'final_log')
+                self.assertEqual(c.lifecycle_diagnostics['ShutdownError'], 'camera_close_timeout')
+                self.assertEqual(c.lifecycle_diagnostics['ShutdownCompleted'], 1)
                 self.assertIsNone(c.devices[const.DEVICE_DETECTOR])
                 self.assertTrue(c._camera_close_worker.is_alive())
                 self.assertFalse(c._release_camera_detector())

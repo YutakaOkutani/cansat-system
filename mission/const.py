@@ -2,6 +2,7 @@ import os
 from enum import IntEnum
 
 from lib.cone_diagnostics import CONE_DIAGNOSTIC_LOG_COLUMNS
+from mission.diagnostics import FINAL_DIAGNOSTIC_DEFAULTS
 from mission.paths import DEFAULT_RUNS_ROOT, ROI_CAPTURE_DIR as RUNTIME_ROI_CAPTURE_DIR
 from mission.paths import ROI_PRIMARY_REFERENCE, ROI_REFERENCE_DIR as VERSIONED_ROI_REFERENCE_DIR
 
@@ -22,7 +23,7 @@ class Phase(IntEnum):
 LOG_DIR = str(DEFAULT_RUNS_ROOT)
 LOG_PREFIX = "robust_log_"
 LOG_FILE_DATETIME_FORMAT = "%Y-%m%d-%H%M%S"
-MISSION_LOG_SCHEMA_VERSION = 3
+MISSION_LOG_SCHEMA_VERSION = 6
 
 # 大会／ミッション固有の制御契約。
 # 現在値はNSE2026で検証された現行ミッションを表し、由来は
@@ -95,9 +96,9 @@ MISSION_PHASE_TIMEOUT_TRANSITIONS = {
 # 現場調整はまずこのブロックだけを見る。
 #
 # 高度検知:
-#   Phase0突入後、最初の有効なBMP高度を基準高度として保存する。
-#   `基準高度 - 現在高度` が DROP_ALTITUDE_DIFF_THRESHOLD [m] を超えると
-#   落下候補としてラッチし、PHASE0_DROP_TO_PHASE1_DELAY_SEC 秒後にPhase1へ進む。
+#   Phase0突入後、有効なBMP高度の最高値を保持する。
+#   `最高高度 - 現在高度` が DROP_ALTITUDE_DIFF_THRESHOLD [m] 以上になると
+#   落下候補とし、条件を維持して PHASE0_DROP_TO_PHASE1_DELAY_SEC 秒後にPhase1へ進む。
 #   誤検知が多い場合は上げる。落としても高度で拾えない場合は下げる。
 #
 # 衝撃検知:
@@ -112,7 +113,7 @@ MISSION_PHASE_TIMEOUT_TRANSITIONS = {
 #   小さくするとbaselineが安定するが、長い姿勢変化には鈍くなる。
 #   PHASE0_DROP_TO_PHASE1_DELAY_SEC は検知後に開傘/着地を待つ時間。
 IMPACT_FALL_THRESHOLD = 30.0
-PHASE0_IMPACT_DELTA_THRESHOLD = 6.0
+PHASE0_IMPACT_DELTA_THRESHOLD = 15.0
 PHASE0_IMPACT_CONFIRM_SAMPLES = 2
 PHASE0_ACCEL_BASELINE_ALPHA = 0.08
 DROP_ALTITUDE_DIFF_THRESHOLD = 20.0
@@ -387,6 +388,11 @@ GOAL_ALIGN_MIN_DISTANCE_CM = 6.0
 GOAL_ALIGN_PULSE_SEC = 0.05
 GOAL_EARLY_ENTRY_DISTANCE_CM = 30.0
 CAMERA_CLOSE_TIMEOUT_SEC = 1.0
+PROCESS_SHUTDOWN_TIMEOUT_SEC = 15.0  # Includes the 10 s radio command deadline.
+PHASE7_ERROR_EXIT_CODE = 80  # Must match systemd RestartPreventExitStatus.
+RECOVERY_ERROR_EXIT_CODE = 81  # Invalid durable state must not start a new mission.
+RECOVERY_SAVE_INTERVAL_SEC = 1.0
+RECOVERY_CLOCK_TOLERANCE_SEC = 2.0
 CONE_CLOSE_TRACK_SURFACE_HUE = 0.85
 
 # A previously identified cone may fill the image during the last approach.
@@ -607,6 +613,9 @@ LOG_HEADER = [
     "Phase",
     "Phase0ExitReason",
     "Phase0ExitDetail",
+    "Phase0CurrentAltitude",
+    "Phase0MaxAltitude",
+    "Phase0AltitudeDrop",
     "AccX",
     "AccY",
     "AccZ",
@@ -731,3 +740,6 @@ LOG_HEADER = [
     "RadioConfigSource",
     "RadioRestoreDeadlineElapsedSec",
 ]
+
+# Append diagnostics without changing the order of existing fields.
+LOG_HEADER.extend(FINAL_DIAGNOSTIC_DEFAULTS)

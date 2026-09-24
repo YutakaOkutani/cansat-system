@@ -1,7 +1,10 @@
 import math
+import threading
 import time
 
 from mission.goal import goal_evidence, final_entry_evidence, alignment_evidence
+from mission.diagnostics import elapsed
+
 from mission.const import (
     GOAL_STOP_DISTANCE_CM, GOAL_CENTER_TOLERANCE,
     PHASE6_APPROACH_SPEED,
@@ -971,18 +974,18 @@ class MotorManager:
         """Apply one production Phase5 visual-approach motor decision."""
         now = time.time()
         if snapshot.get('cone_close_track', {}).get('hold'):
-            self.stop_motors()
+            self.stop_motors(reason='phase5:close_hold')
             return
         if not self._camera_observation_fresh(snapshot, now):
-            self.stop_motors()
+            self.stop_motors(reason='phase5:camera_stale')
             return
         matched, _, _ = final_entry_evidence(snapshot, now, time.monotonic())
         if matched:
-            self.stop_motors()
+            self.stop_motors(reason='phase5:final_entry_observation')
             return
         close_reached = evaluate_cone_candidate(snapshot)["close_reached"]
         if close_reached and cone_centered_for_final_approach(snapshot):
-            self.stop_motors()
+            self.stop_motors(reason='phase5:visual_close_centered')
             return
         if not self._camera_control_frame_ready(snapshot, now, 5):
             return
@@ -1049,19 +1052,31 @@ class MotorManager:
     def _drive_phase6_approach(self, snapshot):
         now = time.monotonic()
         action = getattr(self, 'phase6_action', 'forward')
-        matched, _, distance = (alignment_evidence(snapshot, time.time(), now)
+        matched, evidence_reason, distance = (alignment_evidence(snapshot, time.time(), now)
                                 if action in ('left', 'right') else
                                 goal_evidence(snapshot, time.time(), now))
         if action in ('left', 'right'):
             direction = snapshot.get('cone_direction', 0.5)
             matched = matched and (direction < 0.5 - GOAL_CENTER_TOLERANCE if action == 'left'
                                    else direction > 0.5 + GOAL_CENTER_TOLERANCE)
-        if (self._shutdown_active()
-                or bool(getattr(self, "mission_total_timeout_triggered", False))
-                or now >= float(getattr(self, "phase6_motion_until", 0.0))
-                or snapshot.get('angle_motion_monotonic', 0) > getattr(self, 'phase6_motion_started', now)
-                or not matched or distance <= GOAL_STOP_DISTANCE_CM):
-            self.stop_motors()
+            if not matched and evidence_reason == 'camera_sonar_matched':
+                evidence_reason = 'alignment_direction_mismatch'
+        gate = ''
+        if self._shutdown_active():
+            gate = 'shutdown'
+        elif bool(getattr(self, 'mission_total_timeout_triggered', False)):
+            gate = 'mission_timeout'
+        elif now >= float(getattr(self, 'phase6_motion_until', 0.0)):
+            gate = 'pulse_deadline_or_not_authorized'
+        elif snapshot.get('angle_motion_monotonic', 0) > getattr(self, 'phase6_motion_started', now):
+            gate = 'heading_changed'
+        elif not matched:
+            gate = 'evidence:' + evidence_reason
+        elif distance <= GOAL_STOP_DISTANCE_CM:
+            gate = 'stop_distance'
+        self.phase6_motor_gate = gate or 'drive_authorized'
+        if gate:
+            self.stop_motors(reason='phase6:' + gate)
             return
         if action in ('left', 'right'):
             self._set_forward_pivot_turn(action, PHASE6_APPROACH_SPEED,
@@ -1074,19 +1089,43 @@ class MotorManager:
             cmd_type="phase6_range_approach",
         )
 
-    def _record_motor_command(self, cmd_type, motor1_speed, motor1_forward, motor2_speed, motor2_forward):
-        self.last_motor_command = {
-            "type": cmd_type,
-            "updated_ms": int(time.time() * 1000),
-            "motor1_speed": float(motor1_speed),
-            "motor1_forward": int(bool(motor1_forward)),
-            "motor2_speed": float(motor2_speed),
-            "motor2_forward": int(bool(motor2_forward)),
-        }
+    def _record_motor_command(self, cmd_type, motor1_speed, motor1_forward, motor2_speed, motor2_forward, *, stop_reason="unspecified"):
+        # Retain pulse edges across CSV sampling intervals (a pulse is only 50 ms).
+        lock = self.__dict__.setdefault('_motor_diagnostic_lock', threading.Lock())
+        with lock:
+            wall, mono = time.time(), time.monotonic()
+            previous = getattr(self, 'last_motor_command', {}).get('type', '')
+            was_pulse = previous.startswith('phase6_')
+            is_pulse = cmd_type.startswith('phase6_')
+            diag = dict(getattr(self, 'motor_diagnostics', {}))
+            diag['Phase6MotorGate'] = getattr(self, 'phase6_motor_gate', '')
+            if cmd_type == 'stop':
+                diag['MotorStopReason'] = stop_reason
+            if is_pulse and not was_pulse:
+                self._pulse_output_started = mono
+                diag.update(Phase6PulseStartedCount=diag.get('Phase6PulseStartedCount', 0) + 1,
+                            Phase6LastPulseId=getattr(self, 'phase6_pulses', ''),
+                            Phase6LastPulseStartElapsedSec=elapsed(self, wall),
+                            Phase6LastPulseEndElapsedSec='', Phase6LastPulseDurationSec='',
+                            Phase6LastPulseStopReason='')
+            elif was_pulse and not is_pulse:
+                diag.update(Phase6LastPulseEndElapsedSec=elapsed(self, wall),
+                            Phase6LastPulseDurationSec=round(mono - self._pulse_output_started, 4),
+                            Phase6LastPulseStopReason=diag.get('MotorStopReason', cmd_type))
+            self.motor_diagnostics = diag
+            self.last_motor_command = {
+                "type": cmd_type, "updated_ms": int(wall * 1000),
+                "motor1_speed": float(motor1_speed), "motor1_forward": int(bool(motor1_forward)),
+                "motor2_speed": float(motor2_speed), "motor2_forward": int(bool(motor2_forward)),
+            }
 
     def move_motor_thread(self):
         while not self._shutdown_active():
             try:
+                if getattr(self, '_recovery_starting', False):
+                    self.stop_motors(reason='recovery_initializing')
+                    time.sleep(PHASE45_MOTOR_LOOP_INTERVAL)
+                    continue
                 snapshot = self.st.snapshot()
                 phase = Phase(snapshot["phase"])
                 direction = snapshot["direction"]
@@ -1398,7 +1437,7 @@ class MotorManager:
             forward_motor_2,
         )
 
-    def stop_motors(self):
+    def stop_motors(self, reason="unspecified"):
         motor_1_pwm = self.devices.get(DEVICE_MOTOR_1_PWM)
         motor_2_pwm = self.devices.get(DEVICE_MOTOR_2_PWM)
         if motor_1_pwm:
@@ -1407,4 +1446,4 @@ class MotorManager:
             motor_2_pwm.value = 0
         for state in self.motor_state.values():
             state["speed"] = 0.0
-        self._record_motor_command("stop", 0.0, True, 0.0, True)
+        self._record_motor_command("stop", 0.0, True, 0.0, True, stop_reason=reason)

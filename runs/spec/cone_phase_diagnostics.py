@@ -69,7 +69,7 @@ class _VisionController:
             observation_accepted=True,
         )
 
-    def stop_motors(self):
+    def stop_motors(self, reason="unspecified"):
         self.stop_motor_calls += 1
 
     def transition_to_give_up(self, reason):

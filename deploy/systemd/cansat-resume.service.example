@@ -1,0 +1,13 @@
+[Unit]
+Description=Resume an interrupted CanSat mission without the boot timer delay
+# Match the mission user's data directory when installing on another account.
+ConditionPathExists=/home/pi/cansat-data/mission-state.json
+
+[Service]
+Type=oneshot
+# Start the same unit as the timer; systemd prevents concurrent duplicate starts.
+# main.py validates the checkpoint and exits without hardware if Phase7 is saved.
+ExecStart=/usr/bin/systemctl --no-block start cansat.service
+
+[Install]
+WantedBy=multi-user.target

@@ -100,6 +100,7 @@ class _OffsetLearningHarness:
 
 
 class _ShutdownHarness:
+    _shutdown_checkpoint = CanSatController._shutdown_checkpoint
     request_shutdown = CanSatController.request_shutdown
 
     def __init__(self):
@@ -112,7 +113,7 @@ class _ShutdownHarness:
     def restore_mission_radio(self, reason):
         self.actions.append(("radio", reason))
 
-    def stop_motors(self):
+    def stop_motors(self, reason="unspecified"):
         self.actions.append(("motors", "stop"))
 
     def close_hardware(self):
@@ -211,15 +212,13 @@ class ControllerExceptionSafetyTest(unittest.TestCase):
 
         self.assertTrue(harness._shutdown_requested)
         self.assertEqual(harness.mission_end_reason, "PHASE_SUBSET_COMPLETED")
-        self.assertEqual(
-            harness.actions,
-            [
-                ("radio", "shutdown_PHASE_SUBSET_COMPLETED"),
-                ("motors", "stop"),
-                ("hardware", "close"),
-                ("log", "final"),
-            ],
-        )
+        self.assertEqual(harness.actions[0], ("motors", "stop"))
+        self.assertLess(harness.actions.index(("hardware", "close")), len(harness.actions) - 1)
+        self.assertEqual(harness.actions[-1], ("log", "final"))
+        self.assertEqual(harness.lifecycle_diagnostics['ShutdownCompleted'], 1)
+        before = list(harness.actions)
+        harness.request_shutdown('RUN_EXIT')
+        self.assertEqual(harness.actions, before)
 
     def test_startup_failures_always_request_shutdown(self):
         for stage in ("setup", "led", "radio", "phase"):

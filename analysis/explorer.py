@@ -43,6 +43,9 @@ except Exception:
     GPS_MIN_SATELLITES = 4
     LOG_PREFIX = "robust_log_"
 
+from analysis.final_approach import write_final_approach_report
+from mission.diagnostics import FINAL_DIAGNOSTIC_DEFAULTS
+
 from analysis.log_selector import (
     create_analysis_output_dir,
     find_latest_log,
@@ -824,6 +827,11 @@ def analyze_explorer_log(
     ensure_runtime_dependencies()
     log_path = resolve_log_path(file_path)
 
+    # Final-phase diagnosis remains available even if GPS cannot produce a map.
+    out_dir = prepare_output_dir(log_path)
+    write_analysis_context(out_dir, log_path=log_path)
+    write_final_approach_report(log_path, out_dir)
+
     raw_df = pd.read_csv(log_path)
     df = build_mission_dataframe(raw_df)
     phase_summary, summary = summarize_mission(df)
@@ -840,8 +848,6 @@ def analyze_explorer_log(
         bundled_camera_dir = log_path.parent / "camera"
         if bundled_camera_dir.is_dir():
             camera_dir = bundled_camera_dir
-    out_dir = prepare_output_dir(log_path)
-    write_analysis_context(out_dir, log_path=log_path)
 
     export_cols = [
         col
@@ -895,6 +901,7 @@ def analyze_explorer_log(
             "Distance",
             "Azimuth",
             "MissionEndReason",
+            *FINAL_DIAGNOSTIC_DEFAULTS,
         ]
         if col in df.columns
     ]

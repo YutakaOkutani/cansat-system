@@ -30,7 +30,9 @@ class Phase0Handler(BasePhaseHandler):
         entry_marker = getattr(controller, "phase_entry_time", None)
         if getattr(controller, "phase0_entry_marker", None) != entry_marker:
             controller.phase0_entry_marker = entry_marker
-            controller.phase0_initial_alt = None
+            controller.phase0_max_altitude = None
+            controller.phase0_current_altitude = None
+            controller.phase0_altitude_drop = None
             controller.phase0_drop_detect_time = None
             controller.phase0_drop_detect_reason = None
             controller.phase0_exit_reason = ""
@@ -57,9 +59,21 @@ class Phase0Handler(BasePhaseHandler):
             and snapshot["fall"] is not None
         )
 
-        if bmp_valid and controller.phase0_initial_alt is None:
-            controller.phase0_initial_alt = snapshot["alt"]
-            print(f"Start Altitude: {controller.phase0_initial_alt:.2f}m")
+        # SensorManager validates finite/range values before publishing altitude.
+        # Only fresh, valid BMP observations may update the Phase0 peak.
+        current_altitude = snapshot["alt"] if bmp_valid else None
+        max_altitude = controller.phase0_max_altitude
+        altitude_drop = None
+        if current_altitude is not None:
+            if max_altitude is None:
+                max_altitude = current_altitude
+                print(f"Start Altitude: {current_altitude:.2f}m")
+            else:
+                max_altitude = max(max_altitude, current_altitude)
+            altitude_drop = max_altitude - current_altitude
+        controller.phase0_max_altitude = max_altitude
+        controller.phase0_current_altitude = current_altitude
+        controller.phase0_altitude_drop = altitude_drop
 
         fall_norm = float(snapshot["fall"] or 0.0)
         acc_baseline = getattr(controller, "phase0_acc_baseline", None)
@@ -71,11 +85,7 @@ class Phase0Handler(BasePhaseHandler):
                 acc_baseline = (1.0 - alpha) * acc_baseline + alpha * fall_norm
             controller.phase0_acc_baseline = acc_baseline
 
-        initial_alt = controller.phase0_initial_alt
-        altitude_diff = 0.0
-        if bmp_valid and initial_alt is not None:
-            altitude_diff = initial_alt - snapshot["alt"]
-        is_drop = bmp_valid and initial_alt is not None and altitude_diff > DROP_ALTITUDE_DIFF_THRESHOLD
+        is_drop = altitude_drop is not None and altitude_drop >= DROP_ALTITUDE_DIFF_THRESHOLD
         impact_delta = 0.0
         if acc_valid and acc_baseline is not None:
             impact_delta = abs(fall_norm - acc_baseline)
@@ -113,7 +123,10 @@ class Phase0Handler(BasePhaseHandler):
         detect_detail = ""
         if is_drop:
             detect_reason = "altitude"
-            detect_detail = f"altitude_diff={altitude_diff:.2f}m"
+            detect_detail = (
+                f"current_altitude={current_altitude:.2f}m "
+                f"max_altitude={max_altitude:.2f}m altitude_drop={altitude_drop:.2f}m"
+            )
         elif is_impact:
             detect_reason = "impact"
             detect_detail = (

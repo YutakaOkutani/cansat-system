@@ -1,0 +1,23 @@
+[Unit]
+Description=Reset CanSat mission for an orderly OS reboot or poweroff
+DefaultDependencies=no
+# Finish stopping writers before deleting their checkpoint. Ordinary service
+# stops and abrupt power loss must retain recovery.
+Conflicts=cansat.service cansat.timer cansat-resume.service
+After=cansat.service cansat.timer cansat-resume.service
+Before=shutdown.target umount.target reboot.target poweroff.target
+
+[Service]
+Type=oneshot
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/cansat-system
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/pi/venv/bin/python -m mission.recovery reset
+TimeoutStartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Enable without --now. Starting this unit manually also resets the mission.
+WantedBy=reboot.target poweroff.target

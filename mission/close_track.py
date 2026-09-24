@@ -85,7 +85,8 @@ class CloseConeTrack:
 
     def _result(self, reason, eligible=False, sequence=0):
         deadline = min(self.deadline, self.center[2] + CONE_CLOSE_TRACK_MAX_SEC) if self.center else self.deadline
-        return dict(hold=self.hold, eligible=eligible, reason=reason,
+        return dict(anchor_present=self.anchor is not None, center_present=self.center is not None,
+                    hold=self.hold, eligible=eligible, reason=reason,
                     count=self.count, sequence=sequence, deadline=deadline,
                     center_heading=self.center[0] if self.center else float('nan'),
                     center_travel=self.center[1] if self.center else float('nan'))

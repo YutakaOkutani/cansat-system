@@ -15,6 +15,8 @@ from lib.cone_diagnostics import (
     normalize_cone_diagnostics,
 )
 
+from mission.diagnostics import diagnostic_values
+
 from mission.const import (
     BMP_ALTITUDE_MAX_VALID,
     BMP_ALTITUDE_MIN_VALID,
@@ -191,6 +193,10 @@ class SensorManager:
             self._coerce_int(current_data.get("phase", 0)),
             str(getattr(self, "phase0_exit_reason", "")),
             str(getattr(self, "phase0_exit_detail", "")),
+            *[
+                "" if getattr(self, name, None) is None else f"{getattr(self, name):.2f}"
+                for name in ("phase0_current_altitude", "phase0_max_altitude", "phase0_altitude_drop")
+            ],
             f"{acc[0]:.2f}",
             f"{acc[1]:.2f}",
             f"{acc[2]:.2f}",
@@ -324,7 +330,7 @@ class SensorManager:
             str(getattr(self, "radio_last_event", "")),
             str(getattr(self, "radio_config_source", "")),
             f"{self._coerce_float(radio_restore_deadline_elapsed_sec):.2f}",
-        ]
+        ] + diagnostic_values(self, current_data, time.monotonic())
 
     def _append_log_row(self, writer, file_obj):
         writer.writerow(self._build_log_row())
@@ -1184,6 +1190,8 @@ class SensorManager:
             except Exception as exc:
                 print(f"BNO Thread Slice Error: {exc}")
                 traceback.print_exc()
+            if bool(getattr(self, "_shutdown_requested", False)):
+                break
             if bno_data:
                 self.st.update_imu(
                     acc=bno_data["acc"],

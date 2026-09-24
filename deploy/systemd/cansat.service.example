@@ -10,6 +10,9 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=/home/pi/venv/bin/python /home/pi/cansat-system/main.py
 Restart=on-failure
 RestartSec=5
+# 80: Phase7 cleanup failure; 81: invalid/locked recovery state.
+# Other failures retain automatic recovery.
+RestartPreventExitStatus=80 81
 TimeoutStopSec=15
 StandardOutput=journal
 StandardError=journal

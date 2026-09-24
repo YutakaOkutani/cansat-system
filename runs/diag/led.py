@@ -66,7 +66,9 @@ class LedPatternHarness(LedManager):
 
         self.time_phase1_start = None
         self.phase0_entry_marker = None
-        self.phase0_initial_alt = None
+        self.phase0_max_altitude = None
+        self.phase0_current_altitude = None
+        self.phase0_altitude_drop = None
         self.phase2_start_time = None
         self.phase2_stage = "straight"
         self.phase2_stage_start = None

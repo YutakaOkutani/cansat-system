@@ -31,6 +31,9 @@ try:
 except Exception:
     LOG_HEADER = []
 
+from analysis.final_approach import write_final_approach_report
+from mission.diagnostics import FINAL_DIAGNOSTIC_DEFAULTS
+
 from analysis.log_selector import (
     create_analysis_output_dir,
     find_latest_log,
@@ -39,6 +42,14 @@ from analysis.log_selector import (
 )
 
 COLUMN_GROUPS = [
+    {"key": "recovery_and_radio", "title": "Sensor recovery / Radio",
+     "cols": ["BMPStaleSec", "BMPUpdatedElapsedSec", "BMPValid",
+              "BNOAccStaleSec", "BNOAccUpdatedElapsedSec", "BNOAccValid",
+              "CameraFailCount", "CameraRecoveryElapsedSec", "CameraRecoveryExhausted",
+              "CameraReinitAttemptCount", "RadioConfigSource", "RadioControlMode",
+              "RadioDisabled", "RadioLastEvent", "RadioRestoreDeadlineElapsedSec"]},
+    {"key": "final_approach_shutdown", "title": "Final approach / Shutdown",
+     "cols": list(FINAL_DIAGNOSTIC_DEFAULTS)},
     {
         "key": "time_and_phase",
         "title": "Time & Mission Phase",
@@ -49,6 +60,9 @@ COLUMN_GROUPS = [
             "Phase",
             "MissionElapsedSec",
             "MissionEndReason",
+            "Phase7ArrivalReason",
+            "Phase0ExitReason",
+            "Phase0ExitDetail",
             "MissionTotalTimeout",
         ],
     },
@@ -82,6 +96,11 @@ COLUMN_GROUPS = [
             "GPSFixSeq",
             "GPSHeadingBaselineM",
         ],
+    },
+    {
+        "key": "phase0_altitude",
+        "title": "Phase 0 - Current / Maximum Altitude & Descent [m]",
+        "cols": ["Phase0CurrentAltitude", "Phase0MaxAltitude", "Phase0AltitudeDrop"],
     },
     {
         "key": "altitude_pressure",
@@ -566,9 +585,20 @@ def write_coverage_reports(df: pd.DataFrame, out_dir: Path) -> dict:
     if "LogSchemaVersion" not in actual_set:
         legacy_optional_missing = {"LogSchemaVersion", "RunId"} & expected_set
 
+    versions = pd.to_numeric(df.get("LogSchemaVersion", pd.Series(dtype=float)),
+                             errors="coerce").dropna()
+    if versions.empty or versions.max() < 4:
+        legacy_optional_missing.update(set(FINAL_DIAGNOSTIC_DEFAULTS) - actual_set)
+    elif versions.max() < 6:
+        legacy_optional_missing.update({c for c in FINAL_DIAGNOSTIC_DEFAULTS
+                                        if c.startswith('Recovery')} - actual_set)
+    if versions.empty or versions.max() < 5:
+        legacy_optional_missing.update({'Phase0CurrentAltitude', 'Phase0MaxAltitude',
+                                        'Phase0AltitudeDrop'} - actual_set)
+
     duplicate_group_cols = sorted({c for c in grouped_cols if grouped_cols.count(c) > 1})
     expected_missing_in_groups = sorted(expected_set - grouped_set)
-    grouped_not_in_expected = sorted(grouped_set - expected_set) if LOG_HEADER else []
+    grouped_not_in_expected = sorted(grouped_set - expected_set - {"ObstacleDist"}) if LOG_HEADER else []
     actual_missing_from_csv = sorted(expected_set - actual_set - legacy_optional_missing)
     actual_extra_in_csv = sorted(actual_set - expected_set) if LOG_HEADER else []
 
@@ -819,6 +849,7 @@ def analyze_cansat_log(file_path: str | Path | None = None) -> Path:
     df.attrs["source_path"] = str(log_path)
     out_dir = prepare_output_dir(log_path)
     write_analysis_context(out_dir, log_path=log_path)
+    write_final_approach_report(log_path, out_dir)
 
     coverage = write_coverage_reports(df, out_dir)
     df = detect_anomalies(df, out_dir)

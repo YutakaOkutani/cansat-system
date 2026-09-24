@@ -625,12 +625,14 @@ python3 main.py
 
 ### 本番運用（systemd）
 
-`tmux` は手動起動して画面を見ながらデバッグする場合、`systemd` は異常終了時に再起動する必要がある本番運用に使用する。定義本体は [`deploy/systemd/`](deploy/systemd/) で管理する。
+`tmux` は手動起動して画面を見ながらデバッグする場合、`systemd` は起動時刻・実行ログの管理と、走行途中の異常終了からの自動復帰に使用する。定義本体は [`deploy/systemd/`](deploy/systemd/) で管理する。
 
 各unitの役割は次のとおり。
 
-* `cansat.service`: `main.py`を実行し、異常終了時に再起動する
-* `cansat.timer`: OS起動から5分後に`cansat.service`を開始する
+* `cansat.service`: `main.py`を実行し、途中の異常終了では自動再起動する（`Restart=on-failure`）。Phase7での通常終了（コード0）と終了処理異常（コード80）、復帰データの不整合・二重起動（コード81）は再起動しない（`RestartPreventExitStatus=80 81`）
+* `cansat.timer`: 初回ミッションをOS起動から5分後に開始する
+* `cansat-resume.service`: 保存状態があるOS再起動では、5分を待たず同じ`cansat.service`を開始する。P7保存済みならアプリがハードウェアを起動せず終了する
+* `cansat-reset-on-reboot.service`: 通常の再起動・シャットダウン時にミッション停止後の保存状態をリセットする。次回は5分待ち後にP0から開始する
 * `discord-ip.service`: DiscordへIPアドレスを通知する。ミッションのserviceとtimerには依存しない
 
 #### 1. 実機のパスを確認する
@@ -649,24 +651,28 @@ ls /home/pi/venv/bin/python
 cd ~/cansat-system
 sudo install -m 0644 deploy/systemd/cansat.service.example /etc/systemd/system/cansat.service
 sudo install -m 0644 deploy/systemd/cansat.timer.example /etc/systemd/system/cansat.timer
+sudo install -m 0644 deploy/systemd/cansat-resume.service.example /etc/systemd/system/cansat-resume.service
+sudo install -m 0644 deploy/systemd/cansat-reset-on-reboot.service.example /etc/systemd/system/cansat-reset-on-reboot.service
 sudo install -m 0644 deploy/systemd/discord-ip.service.example /etc/systemd/system/discord-ip.service
 
 sudo nano /etc/systemd/system/cansat.service
 sudo nano /etc/systemd/system/cansat.timer
+sudo nano /etc/systemd/system/cansat-resume.service
+sudo nano /etc/systemd/system/cansat-reset-on-reboot.service
 sudo nano /etc/systemd/system/discord-ip.service
 sudo systemctl daemon-reload
 ```
 
-`cansat.timer`の`OnBootSec`は開始までの待ち時間で、配布例では`5min`としている。必要に応じて配置後の`/etc/systemd/system/cansat.timer`を編集する。`cansat.service`と`discord-ip.service`は、ユーザー名とパスを必ず確認する。
+`cansat.timer`の`OnBootSec`は開始までの待ち時間で、配布例では`5min`としている。必要に応じて配置後の`/etc/systemd/system/cansat.timer`を編集する。`cansat.service`、`cansat-reset-on-reboot.service`、`discord-ip.service`は、ユーザー名とパスを必ず確認する。リセット用unitのユーザー・Python・作業ディレクトリは`cansat.service`と合わせる。`cansat-resume.service`の`ConditionPathExists`も実行ユーザーの`~/cansat-data/mission-state.json`に合わせる。
 
-unit更新時は同じ`install`コマンドで再配置し、編集が必要な項目を再確認してから`sudo systemctl daemon-reload`を実行する。
+unit更新時は同じ`install`コマンドで再配置し、編集が必要な項目を再確認してから`sudo systemctl daemon-reload`を実行する。リセット用unitを旧版から更新した場合は、`sudo systemctl enable cansat-reset-on-reboot.service`も再実行する。これでシャットダウン時の実行先も追加される（`--now`は付けない）。
 
 #### 3. 自動起動を選択する
 
 ミッションを起動から5分後に開始する場合は、`cansat.service`を直接enableせず、timerをenableする。
 
 ```bash
-sudo systemctl enable cansat.timer
+sudo systemctl enable cansat.timer cansat-resume.service cansat-reset-on-reboot.service
 ```
 
 Discord通知をOS起動時に実行する場合は、Discord側だけをenableする。
@@ -679,21 +685,50 @@ sudo systemctl enable discord-ip.service
 
 #### 4. 手動で起動・停止する
 
-```bash
-# ミッションを今すぐ開始
-sudo systemctl start cansat.service
+**新しいミッションを今すぐP0から開始**する場合は、次を実行する。上記unitの配置とパス設定が必要。最初のコマンドが実行中のミッションとtimerを停止し、保存状態をリセットする。リセット成功時だけ次の起動へ進む。OS自体は再起動しない。
 
+```bash
+sudo systemctl start cansat-reset-on-reboot.service &&
+sudo systemctl start cansat.service
+```
+
+`sudo systemctl start cansat.service`単独は保存状態を使う起動であり、新規試走用ではない。P0〜P6の保存があれば復帰し、P7保存済みなら走行せず終了する。保存JSONが不適切なら停止する。
+
+```bash
 # ミッションを停止
 sudo systemctl stop cansat.service
 
 # Discord通知を今すぐ実行
 sudo systemctl start discord-ip.service
 
-# ミッションの5分遅延自動起動だけを無効化
-sudo systemctl disable --now cansat.timer
+# ミッションの初回起動と再起動時の復帰を無効化
+sudo systemctl disable --now cansat.timer cansat-resume.service
 ```
 
-`cansat.timer`を無効化しても、`cansat.service`と`discord-ip.service`は手動で起動できる。Discordの自動起動設定にも影響しない。
+`cansat.timer`と`cansat-resume.service`を無効化しても、`cansat.service`と`discord-ip.service`は手動で起動できる。Discordの自動起動設定にも影響しない。
+
+#### 中断からの復帰・次の試走へのリセット
+
+> **競技開始前の注意：電源をいきなり抜いて差し直す操作を、新規スタートの手順にしないでください。**
+> 正常なシャットダウンなしの電源抜き差しは瞬断と同じ扱いです。保存状態が残っていれば、5分待ちを省略して途中フェーズから復帰するか、P7保存済みなら走行せず終了します。P0からの開始は保証されません。
+> 競技前は、更新済みの`cansat-reset-on-reboot.service`が配置・有効化されていることを確認し、`sudo shutdown -h now` → 終了処理完了を待つ → 電源を外す → 競技開始時に電源を入れる、の順に操作してください。正常なシャットダウンで保存状態のリセットが完了していれば、次回はtimerの5分待ち後にP0から開始します。
+
+`main.py`は`~/cansat-data/mission-state.json`に進行状態を保存する。P0〜P6なら最後に保存した同じフェーズから再開し、P7なら理由にかかわらず走行を再開しない。プロセス異常終了は従来どおり5秒後にserviceが再起動し、瞬断などによるOS再起動は復帰用serviceが5分待ちを省略する。通常の`sudo reboot`や`sudo shutdown -h now`では保存状態をリセットするため、次回は初回と同じ5分待ち後にP0から開始する。
+
+フェーズの判断条件は維持し、センサ値・GOAL票は起動後に取り直す。消費済み時間、P2の段階、P6の前進回数は引き継ぐ。全体期限には停止中の時間も含むため、長時間停止後は既存の全体タイムアウトで終了し得る。詳細は[復帰仕様・CSV診断](docs/reference/mission-log.md)を参照。
+
+**一からやり直して再起動する場合は`sudo reboot`だけでよい**（リセット用unitの配置・enable後）。P7の記録もこの操作では消す。正常にシャットダウンしてから電源を入れた場合もP0から開始する。`sudo shutdown -h now`または`sudo poweroff`で終了処理が完了してから電源を切る。再起動せずに別ミッションを始める場合は、上記「手動で起動・停止する」の2行を使う。Ctrl+Cで中断したP0〜P6も、リセットしなければ次の手動起動で復帰する。
+
+```bash
+# 正常にシャットダウンし、次の電源投入時はP0から開始
+sudo shutdown -h now
+```
+
+保存データの破損・設定不一致・大きな時計の巻き戻りは、P0に戻して走り直さず停止する。実機の時計が正しく復元されることを確認する。`runs/orch/`の部分実行はこの保存状態を読まず、更新もしない。
+
+`cansat-reset-on-reboot.service`は`enable`だけを行い、`--now`は付けない。`start`するとその場でミッションを停止・リセットする。既に旧unitを配置済みの場合も、新unitを配置してユーザー・パスを調整し、`daemon-reload`と`enable cansat-reset-on-reboot.service`を行う。
+
+この例外はOSの通常の再起動経路で判断するため、`systemctl reboot`やソフトウェアが要求した通常再起動も同じ扱いになる。`shutdown -h now`・`poweroff`による正常なシャットダウンもリセットする。電源抜き差し、瞬断、`reboot -f`など終了処理を省略する再起動、ミッションserviceだけの再起動ではリセットしない。リセット処理の失敗や途中の電断時は記録が残る場合がある。正常な再起動・シャットダウンでも保存状態を残す運用に戻す場合は`sudo systemctl disable cansat-reset-on-reboot.service`を実行する。
 
 #### 大会後の再調整時に自動起動をオフにする
 
@@ -701,7 +736,7 @@ sudo systemctl disable --now cansat.timer
 
 ```bash
 # 先に遅延起動の予約を解除し、次回以降の自動起動も無効化
-sudo systemctl disable --now cansat.timer
+sudo systemctl disable --now cansat.timer cansat-resume.service
 
 # 実行中のミッションを停止し、過去にserviceを直接enableした設定も解除
 sudo systemctl disable --now cansat.service
@@ -712,11 +747,11 @@ sudo systemctl disable --now cansat.service
 停止・無効化できたことを確認する。
 
 ```bash
-systemctl is-enabled cansat.timer cansat.service
-systemctl is-active cansat.timer cansat.service
+systemctl is-enabled cansat.timer cansat-resume.service cansat.service
+systemctl is-active cansat.timer cansat-resume.service cansat.service
 ```
 
-`is-enabled`が両方とも`disabled`、`is-active`が両方とも`inactive`なら完了。これらの確認コマンドは、無効・停止状態では終了コードが0以外になるが正常である。再起動後も同じコマンドで確認できる。
+`is-enabled`が3つとも`disabled`、`is-active`が3つとも`inactive`なら完了。これらの確認コマンドは、無効・停止状態では終了コードが0以外になるが正常である。再起動後も同じコマンドで確認できる。
 
 DiscordのIP通知は独立しているため、再調整中も残せる。通知もオフにする場合のみ、次を実行する。
 
@@ -724,13 +759,13 @@ DiscordのIP通知は独立しているため、再調整中も残せる。通�
 sudo systemctl disable --now discord-ip.service
 ```
 
-unitファイルを削除する必要はない。無効化中も`sudo systemctl start cansat.service`で手動起動できるため、再調整時は必要なタイミングで実行する。
+unitファイルを削除する必要はない。無効化中も「手動で起動・停止する」のリセット→起動手順で、必要なタイミングにP0から新しい試走を開始できる。
 
 次の大会に向けて自動起動を戻す場合は、設定と動作の確認後に次を実行する。
 
 ```bash
 # 次回のOS起動から5分遅延の自動起動を再開
-sudo systemctl enable cansat.timer
+sudo systemctl enable cansat.timer cansat-resume.service cansat-reset-on-reboot.service
 
 # Discord通知も無効化していた場合のみ再有効化
 sudo systemctl enable discord-ip.service
@@ -794,7 +829,7 @@ sudo journalctl -u discord-ip.service -b
 cd ~/cansat-system
 
 # 更新中の自動起動と実行中コードを止め、現在のブランチと変更状態を確認
-sudo systemctl stop cansat.timer cansat.service
+sudo systemctl stop cansat.timer cansat-resume.service cansat.service
 git status --short --branch
 
 # GitHubの最新版を取り込む
@@ -820,7 +855,7 @@ Pull Requestをマージする前など、実機で作業ブランチを確認�
 
 ```bash
 cd ~/cansat-system
-sudo systemctl stop cansat.timer cansat.service
+sudo systemctl stop cansat.timer cansat-resume.service cansat.service
 git status --short --branch
 git fetch origin
 
@@ -895,7 +930,7 @@ unitの配置と実機固有パスの編集は「本番運用（systemd）」の
 sudo systemctl enable discord-ip.service
 ```
 
-ミッションの自動起動を止める場合は`cansat.timer`だけを無効化する。`discord-ip.service`は独立しているため、その設定と手動実行には影響しない。
+ミッションの自動起動を止める場合は`cansat.timer`と`cansat-resume.service`を無効化する。`discord-ip.service`は独立しているため、その設定と手動実行には影響しない。
 
 ---
 

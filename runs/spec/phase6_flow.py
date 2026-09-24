@@ -22,7 +22,7 @@ class Controller:
         self.mission_total_timeout_triggered = False
         self.stop_calls = 0
 
-    def stop_motors(self):
+    def stop_motors(self, reason="unspecified"):
         self.stop_calls += 1
 
     def observe(self, now, distance=2.01, direction=0.5, reached=True):
