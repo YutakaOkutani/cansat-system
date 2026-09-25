@@ -1,6 +1,6 @@
 # AI Context Index
 
-> **Audience: AI coding and debugging agents only.** Human setup and execution guidance belongs in [`../README.md`](../README.md). Do not load every file by default.
+> **Audience: AI coding and debugging agents only.** Human setup and production execution guidance belongs in [`../README.md`](../README.md); sonar wiring, diagnostics, and approach details belong in [`operations/sonar.md`](operations/sonar.md). Do not load every file by default.
 
 ## Required read order
 
@@ -55,6 +55,7 @@ docs/
 | `05-coding-rules.md` | Implementation rules by concern | Debug procedure, phase specification |
 | `06-debug-and-test-rules.md` | Diagnosis order, test tiers, E2E safety | Architecture explanation |
 | `07-mission-spec.md` | Mission state machine and phase intent | Full constant tables |
+| `operations/sonar.md` | Human sonar wiring, diagnostic procedure, and approach details | General setup |
 | `reference/*` | High-risk or subsystem-specific contracts | General repository guidance |
 | `competitions/*` | Competition provenance and rule-derived assumptions | Full constant tables or runtime selection logic |
 | `flowchart/` | Reserved location for future source-controlled diagrams | Current mission specification |
