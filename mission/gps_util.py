@@ -41,19 +41,47 @@ def _is_parseable_nmea(line):
         return False
 
 
+def read_gps_line(serial_obj, max_seconds=GPS_SERIAL_TIMEOUT, max_bytes=512):
+    """Bound a line read even when corrupt input arrives without newlines.
+
+    Return partial input at the deadline/size limit, as diagnostic data.
+    A serial read timeout alone does not bound IOBase.readline().
+    """
+    deadline = time.monotonic() + max(0.0, max_seconds)
+    original_timeout = serial_obj.timeout
+    data = bytearray()
+    try:
+        while len(data) < max_bytes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            read_timeout = min(remaining, original_timeout) if original_timeout is not None else remaining
+            if serial_obj.timeout != read_timeout:
+                serial_obj.timeout = read_timeout
+            byte = serial_obj.read(1)
+            if not byte:
+                break
+            data.extend(byte)
+            if byte == b"\n":
+                break
+        return bytes(data)
+    finally:
+        serial_obj.timeout = original_timeout
+
+
 def probe_nmea(serial_obj, probe_seconds=GPS_PROBE_SECONDS):
-    start = time.time()
+    deadline = time.monotonic() + probe_seconds
     last_line = ""
-    while time.time() - start < probe_seconds:
+    while time.monotonic() < deadline:
         try:
-            line_bytes = serial_obj.readline()
+            line_bytes = read_gps_line(serial_obj, max_seconds=max(0.0, deadline - time.monotonic()))
         except Exception:
             return False, last_line
         if not line_bytes:
             continue
         line = line_bytes.decode("utf-8", errors="ignore").strip()
         if line:
-            last_line = line
+            last_line = line[-160:]
         if _is_parseable_nmea(line):
             return True, last_line
     return False, last_line
@@ -128,6 +156,8 @@ def open_gps_serial(log=print):
     bauds = [GPS_BAUDRATE] + [baud for baud in GPS_BAUDRATE_CANDIDATES if baud != GPS_BAUDRATE]
     for port in ports:
         for baud in bauds:
+            if log:
+                log(f"GPS probing: {port} @ {baud}")
             try:
                 serial_obj = serial.Serial(port, baud, timeout=GPS_SERIAL_DISCOVERY_TIMEOUT)
                 try:
@@ -151,7 +181,7 @@ def open_gps_serial(log=print):
                             "GPS startup sync failed: "
                             f"{port} @ {baud} "
                             f"({warmup['total_bytes']} bytes, ~{warmup['approx_sentences']} sentences, "
-                            f"last: {warmup['last_text'] or 'none'})"
+                            f"last: {warmup['last_text'] or 'none'!r})"
                         )
                     try:
                         serial_obj.reset_input_buffer()
@@ -170,7 +200,7 @@ def open_gps_serial(log=print):
                 if log:
                     if last_line:
                         hint = " (baud mismatch or wrong UART?)" if "$" not in last_line else ""
-                        log(f"No NMEA at {port} @ {baud}{hint} (last: {last_line})")
+                        log(f"No NMEA at {port} @ {baud}{hint} (last: {last_line!r})")
                     else:
                         log(f"No NMEA at {port} @ {baud}")
             except Exception as exc:
@@ -323,7 +353,7 @@ class RobustGPSReader:
             self.stable_count = 0
 
         try:
-            line_bytes = self.ser.readline()
+            line_bytes = read_gps_line(self.ser)
         except Exception as exc:
             print(f"GPS read error: {exc}")
             try:

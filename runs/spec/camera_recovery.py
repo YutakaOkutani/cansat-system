@@ -19,6 +19,7 @@ sys.modules.setdefault(
         coerce_gga_metrics=lambda *_args, **_kwargs: None,
         gga_quality_ok=lambda *_args, **_kwargs: False,
         open_gps_serial=lambda *_args, **_kwargs: None,
+        read_gps_line=lambda *_args, **_kwargs: b"",
         parse_gga_sentence=lambda *_args, **_kwargs: None,
     ),
 )

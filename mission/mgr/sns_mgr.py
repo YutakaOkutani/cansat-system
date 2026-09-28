@@ -79,7 +79,7 @@ from mission.const import (
     SONAR_MIN_DISTANCE_CM,
     SONAR_STALE_TIMEOUT_SEC,
 )
-from mission.gps_util import coerce_gga_metrics, gga_quality_ok, open_gps_serial, parse_gga_sentence
+from mission.gps_util import coerce_gga_metrics, gga_quality_ok, open_gps_serial, parse_gga_sentence, read_gps_line
 from mission.nav import calc_distance_and_azimuth
 
 
@@ -1013,7 +1013,7 @@ class SensorManager:
                         pass
                     last_buffer_clear = now
                     stable_count = 0
-                line_bytes = serial_obj.readline()
+                line_bytes = read_gps_line(serial_obj)
                 if not line_bytes:
                     diag["status"] = "NO_BYTES"
                     diag["empty_reads"] += 1
