@@ -54,7 +54,7 @@ class _LogOnlyController(SensorManager):
 class LogSchemaTest(unittest.TestCase):
     def test_final_approach_failure_reasons_are_serialized_without_success(self):
         for reason in ('GOAL_CAMERA_TIMEOUT', 'GOAL_PROXIMITY_UNCONFIRMED',
-                       'GOAL_MOTION_LIMIT', 'GOAL_NO_PROGRESS'):
+                       'GOAL_MOTION_LIMIT', 'GOAL_NO_PROGRESS', 'GOAL_OUTPUT_TIME_LIMIT', 'GOAL_REAPPROACH_LIMIT'):
             ctrl = _LogOnlyController()
             ctrl.mission_end_reason = reason
             ctrl.phase7_arrival_reason = reason
@@ -80,7 +80,7 @@ class LogSchemaTest(unittest.TestCase):
         self.assertEqual(len(row), len(LOG_HEADER))
         self.assertEqual(len(LOG_HEADER), len(set(LOG_HEADER)))
         by_name = dict(zip(LOG_HEADER, row))
-        self.assertEqual(by_name["LogSchemaVersion"], 6)
+        self.assertEqual(by_name["LogSchemaVersion"], 7)
         self.assertEqual(by_name["RunId"], "test-run")
 
     def test_cone_diagnostics_are_written_with_freshness_and_gate_context(self):

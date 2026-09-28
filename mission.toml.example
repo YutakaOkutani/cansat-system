@@ -14,3 +14,17 @@ pre_off_delay_sec = 3
 restore_timeout_sec = 180
 use_sudo = true
 dry_run = false
+
+# Optional P6 tuning. Omitted keys use these field-test defaults.
+# Total mission limit: 20 min; P4: 120/180 s; P5: 180/240 s; P6: 180 s.
+[approach]
+far_forward_sec = 0.4
+far_forward_boost_sec = 0.6
+far_forward_pwm = 70
+far_forward_boost_pwm = 75
+far_align_sec = 0.15
+far_align_boost_sec = 0.30
+far_align_pwm = 65
+far_align_boost_pwm = 75
+forward_output_limit_sec = 60
+align_output_limit_sec = 20

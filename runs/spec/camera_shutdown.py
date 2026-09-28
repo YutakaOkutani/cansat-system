@@ -61,6 +61,6 @@ class CameraShutdownTest(unittest.TestCase):
 
     def test_new_terminal_reasons_remain_distinct_in_phase7(self):
         for reason in ('GOAL_CAMERA_TIMEOUT', 'GOAL_PROXIMITY_UNCONFIRMED',
-                       'GOAL_MOTION_LIMIT', 'GOAL_NO_PROGRESS'):
+                       'GOAL_MOTION_LIMIT', 'GOAL_NO_PROGRESS', 'GOAL_OUTPUT_TIME_LIMIT', 'GOAL_REAPPROACH_LIMIT'):
             c = SimpleNamespace(mission_end_reason=reason)
             self.assertEqual(CanSatController._resolve_phase7_arrival_reason(c), reason)

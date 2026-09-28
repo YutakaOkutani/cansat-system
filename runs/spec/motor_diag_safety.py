@@ -35,6 +35,8 @@ spec.loader.exec_module(motor_diag)
 
 
 class MotorDiagnosticSafetyTest(unittest.TestCase):
+    @patch.object(manager_module, 'MOTOR_SPEED_SCALE_2', .90)
+    @patch.object(motor_diag, 'MOTOR_SPEED_SCALE_2', .90)
     def test_real_output_paths_apply_trim_and_drive_floor(self):
         class Device:
             value = 0.0
@@ -110,7 +112,7 @@ class MotorDiagnosticSafetyTest(unittest.TestCase):
 
     def test_production_motor_trim_matches_current_airframe(self):
         self.assertEqual(motor_diag.MOTOR_SPEED_SCALE_1, 1.00)
-        self.assertEqual(motor_diag.MOTOR_SPEED_SCALE_2, 0.90)
+        self.assertEqual(motor_diag.MOTOR_SPEED_SCALE_2, 1.00)
 
     def test_logical_left_right_routes_to_measured_physical_channels(self):
         mapped = motor_diag.map_logical_wheels_to_physical(

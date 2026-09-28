@@ -23,35 +23,34 @@ class Phase(IntEnum):
 LOG_DIR = str(DEFAULT_RUNS_ROOT)
 LOG_PREFIX = "robust_log_"
 LOG_FILE_DATETIME_FORMAT = "%Y-%m%d-%H%M%S"
-MISSION_LOG_SCHEMA_VERSION = 6
+MISSION_LOG_SCHEMA_VERSION = 7
 
 # 大会／ミッション固有の制御契約。
-# 現在値はNSE2026で検証された現行ミッションを表し、由来は
-# docs/competitions/nse2026.md に記録する。大会間で暗黙に共通扱いしない。
+# センサー・機体値の由来は docs/competitions/nse2026.md を参照。
+# 時間予算は20分の実験用。大会用の時間制限と暗黙に共通扱いしない。
 # タイムアウトと動作関連定数
 TIMEOUT_PHASE_0 = 2 * 60
 TIMEOUT_PHASE_1 = 10
-# Offset成立を優先する。総合13分のうち、Phase3に最低3分を残せる上限。
+# Offset成立を優先する。総合20分のうち、Phase3に最低3分を残せる上限。
 TIMEOUT_PHASE_2 = 90
 TIMEOUT_PHASE_3 = 5 * 60
-TIMEOUT_PHASE_4 = 60
-TIMEOUT_PHASE_5 = 60
+TIMEOUT_PHASE_4 = 120
+TIMEOUT_PHASE_5 = 180
 DATA_SAMPLING_RATE = 0.20
 GRASS_MIN_MOTOR_SPEED = 45
 # Distance-controlled final approach; field calibration required.
 PHASE6_APPROACH_SPEED = 45
-PHASE6_APPROACH_TIMEOUT_SEC = 45.0
+PHASE6_APPROACH_TIMEOUT_SEC = 180.0
 PHASE6_APPROACH_RAMP_TIME = 0.0  # Nonblocking: motor loop enforces short pulse deadlines.
 
 # ミッション全体のフェーズ累積予算
 # Phase3-5 は再入を考慮して、個別タイムアウトより大きい累積値を持たせる。
-# 投下から15分以内の大会制限に対し、systemd 起動遅延を見込んで
-# プログラム開始から13分で give up する。
-MISSION_TIMEOUT_TARGET_TOTAL = 13 * 60
+# 実験用: バッテリーの持ち時間に合わせ、開始から20分で終了する。
+MISSION_TIMEOUT_TARGET_TOTAL = 20 * 60
 MISSION_PHASE3_MIN_RESERVE_SEC = 3 * 60
 MISSION_TIMEOUT_TRANSITION_GRACE_SEC = 5.0
-MISSION_PHASE4_CUMULATIVE_BUDGET = 90
-MISSION_PHASE5_CUMULATIVE_BUDGET = 90
+MISSION_PHASE4_CUMULATIVE_BUDGET = 180
+MISSION_PHASE5_CUMULATIVE_BUDGET = 240
 MISSION_PHASE3_CUMULATIVE_BUDGET = (
     MISSION_TIMEOUT_TARGET_TOTAL
     - TIMEOUT_PHASE_0
@@ -328,7 +327,7 @@ MANUAL_TURN_SPEED_RATIO = 3.0 / 5.0
 # 前転・後転・旋回時の定常PWM下限。ゲイン補正後に同比率で引き上げ、100%で制限する。
 MOTOR_DRIVE_MIN_SPEED = 65.0
 # モーター個体差補正 (PWM指令値に乗算)
-MOTOR_SPEED_SCALE_1 = 1.00
+MOTOR_SPEED_SCALE_1 = 0.70
 MOTOR_SPEED_SCALE_2 = 1.00
 # モーター個体差補正 (PWM指令値に加算, scale適用後)
 # 追加調整はまず各輪のMOTOR_SPEED_SCALEで行う。
@@ -372,7 +371,10 @@ GOAL_MIN_OCCUPANCY = 0.01
 GOAL_MAX_DISTANCE_SPREAD_CM = 8.0
 GOAL_PULSE_SEC = 0.15
 GOAL_SETTLE_SEC = 0.3
-GOAL_OBSERVATION_TIMEOUT_SEC = 6.0
+GOAL_OBSERVATION_TIMEOUT_SEC = 20.0
+GOAL_REAPPROACH_WAIT_SEC = 6.0
+GOAL_CAMERA_TIMEOUT_SEC = 20.0
+GOAL_VISUAL_CLOSE_WAIT_SEC = 6.0
 # Stopped voting and bounded motion; the success threshold remains 3 cm.
 GOAL_VOTE_WINDOW_SIZE = 5
 GOAL_VOTE_WINDOW_SEC = 3.0
@@ -380,19 +382,18 @@ GOAL_RESUME_DISTANCE_CM = 3.5
 GOAL_FAR_CONFIRM_SAMPLES = 2
 GOAL_NEAR_PULSE_SEC = 0.05
 GOAL_NEAR_PULSE_DISTANCE_CM = 8.0
-# Preserve the short-pulse behavior; allow slow translation without spending
+# Preserve near-goal short pulses; allow slow translation without spending
 # its budget on alignment. All limits apply across P6 re-entry.
-GOAL_MAX_FORWARD_PULSES = 40
-GOAL_MAX_ALIGN_PULSES = 12
+GOAL_MAX_FORWARD_PULSES = 120
+GOAL_MAX_ALIGN_PULSES = 60
 GOAL_MAX_PULSES = GOAL_MAX_FORWARD_PULSES + GOAL_MAX_ALIGN_PULSES
 # Provisional small-target guard, not a calibrated visual distance estimate.
 GOAL_SMALL_TARGET_OCCUPANCY = 0.015
 GOAL_SMALL_TARGET_ENTRY_CM = 30.0
 GOAL_RECOVERY_DISTANCE_CM = 75.0  # Hysteresis above the 60 cm entry range.
 GOAL_RECOVERY_SAMPLES = 3
-GOAL_MAX_REAPPROACHES = 2
+GOAL_MAX_REAPPROACHES = 5
 GOAL_PROGRESS_MIN_CM = 0.5
-GOAL_PROGRESS_PULSES = 4
 GOAL_SETTLE_HEADING_DEG = 5.0
 GOAL_ALIGN_MIN_DISTANCE_CM = 6.0
 GOAL_ALIGN_PULSE_SEC = 0.05

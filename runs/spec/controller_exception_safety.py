@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from mission.const import Phase
+from mission.const import Phase, MISSION_TIMEOUT_TOTAL, MISSION_PHASE5_CUMULATIVE_BUDGET
 
 
 def _load_controller_class_without_hardware_dependencies():
@@ -164,7 +164,7 @@ class ControllerExceptionSafetyTest(unittest.TestCase):
             with patch.object(time_module, "time", return_value=100.0):
                 self.assertFalse(harness._handle_timeout_transitions(phase))
             self.assertEqual(harness.mission_end_reason, "RUNNING")
-            with patch.object(time_module, "time", return_value=1000.0):
+            with patch.object(time_module, "time", return_value=MISSION_TIMEOUT_TOTAL):
                 self.assertTrue(harness._handle_timeout_transitions(phase))
             self.assertEqual(harness.mission_end_reason, "MISSION_TOTAL_TIMEOUT")
             self.assertEqual(harness.terminal_phase, Phase.PHASE7)
@@ -176,12 +176,12 @@ class ControllerExceptionSafetyTest(unittest.TestCase):
             snapshot=lambda: {
                 "cone_valid": True,
                 "cone_sequence": 12,
-                "cone_updated_at": 99.8,
+                "cone_updated_at": MISSION_PHASE5_CUMULATIVE_BUDGET - .2,
             }
         )
         time_module = CanSatController._handle_timeout_transitions.__globals__["time"]
 
-        with patch.object(time_module, "time", return_value=100.0):
+        with patch.object(time_module, "time", return_value=MISSION_PHASE5_CUMULATIVE_BUDGET):
             handled = harness._handle_timeout_transitions(Phase.PHASE5)
 
         self.assertTrue(handled)
@@ -190,7 +190,7 @@ class ControllerExceptionSafetyTest(unittest.TestCase):
 
     def test_visible_cone_overrides_phase_budgets_but_not_global_deadline(self):
         for phase in (Phase.PHASE4, Phase.PHASE5):
-            for now, should_end in ((100.0, False), (1000.0, True)):
+            for now, should_end in ((300.0, False), (MISSION_TIMEOUT_TOTAL-0.01, False), (MISSION_TIMEOUT_TOTAL, True)):
                 with self.subTest(phase=phase, now=now):
                     harness = _TimeoutHarness()
                     harness.last_phase_observed = phase

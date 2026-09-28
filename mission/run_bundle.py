@@ -155,6 +155,7 @@ def create_run_bundle(mission_config, run_context, *, log_root=None, now=None) -
             "mission_config_snapshot": mission_snapshot.name,
             "run_context_snapshot": context_snapshot.name if context_snapshot else None,
         },
+        "approach": asdict(mission_config.approach),
         "roi_reference_root": str(ROI_REFERENCE_DIR),
         "roi_patterns": list(ROI_GLOB_PATTERNS),
     }

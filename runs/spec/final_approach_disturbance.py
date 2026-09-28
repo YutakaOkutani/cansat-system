@@ -82,7 +82,7 @@ class FinalDisturbanceTest(unittest.TestCase):
         c.observe(100); execute(c, 100)
         execute(c, 102)
         self.assertEqual(c.phase6_motion_until, 0)
-        execute(c, 107)
+        execute(c, 121)
         self.assertEqual(c.st.snapshot()['phase'], 7)
         self.assertEqual(c.mission_end_reason, 'GOAL_CAMERA_TIMEOUT')
 
@@ -117,23 +117,20 @@ class FinalDisturbanceTest(unittest.TestCase):
                                 observation_time=101.2, observation_accepted=True)
             self.assertEqual(goal_evidence(c.st.snapshot(), 101.2, 101.2)[0], prior_identity)
 
-    def test_motion_resets_votes_and_no_progress_has_finite_exit(self):
+    def test_motion_resets_votes_but_unused_requests_do_not_prove_no_progress(self):
         c = Controller()
         c.observe(100, distance=4.5); execute(c, 100)
-        now = 100
-        for _ in range(40):
-            now += .4
+        for i in range(40):
+            now = 100 + (i+1)*.4
             c.observe(now, distance=4.5); execute(c, now)
             self.assertEqual(c.goal_confirm_count, 0)
-            if c.st.snapshot()['phase'] == 7:
-                break
-        self.assertEqual(c.mission_end_reason, 'GOAL_NO_PROGRESS')
-        self.assertEqual(c.phase6_motion_until, 0)
+        # This fake has no motor worker: zero actual output must not be called stuck.
+        self.assertEqual(c.mission_end_reason, 'RUNNING')
 
     def test_new_good_camera_with_no_echo_exits_unconfirmed(self):
         c = Controller()
         c.observe(100); execute(c, 100)
-        for now in (100.4, 102, 104, 106.1):
+        for now in (100.4, 102, 104, 120.1):
             c.observe(now)
             c.st.update_sonar(sonar_valid=False)
             execute(c, now)
@@ -179,7 +176,7 @@ class FinalDisturbanceTest(unittest.TestCase):
         c = Controller()
         c.observe(100, distance=20, direction=.65); execute(c, 100)
         now = 100
-        for _ in range(110):
+        for _ in range(300):
             now += .31
             c.observe(now, distance=20, direction=.65); execute(c, now)
             if c.st.snapshot()['phase'] == 7:

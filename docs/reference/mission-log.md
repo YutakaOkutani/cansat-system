@@ -94,7 +94,7 @@ Gateは静定待ち、停止後のサンプル待ち、新しい組待ち、証�
 `Phase6LastPulseId/StartElapsedSec/EndElapsedSec/DurationSec`は最後の出力区間を保持し、
 50 msパルスが定期CSVの間に終わっても情報が消えないようにする。
 要求数と開始数、実出力時間、抑止理由を照合する。開始数はrun内累計、要求数・IDは
-Phase6への入場ごとにリセットされる。CSV間で複数パルスが走った場合は最後の区間のみ残る。
+Phase6再入・再起動でも維持される。CSV間で複数パルスが走った場合は最後の区間のみ残る。
 
 経過時間列の単位は秒、距離はcm、方位は度。未観測は空欄、真偽値は0/1。
 Phase6は1秒に1回および終端判定時に状況を即時表示する。
@@ -183,3 +183,17 @@ P7終了後にtimerが発火しても、アプリのP7確認で即終了する�
 手動で新規試走する場合は`systemctl start cansat-reset-on-reboot.service`の成功後に
 `systemctl start cansat.service`を実行する。`&&`で接続し、reset失敗時は起動しない。
 リセット用unitはOS再起動・電源断を要求する依存関係を持たず、手動startはリセットだけを行う。
+
+## スキーマ7: 距離別駆動と実出力予算
+
+`Phase6RequestedDurationSec/RequestedPWM/DistanceBand`は最後の要求の長さ・補正前PWM・距離帯。
+実出力PWMは`Motor1CmdSpeed/Motor2CmdSpeed`を確認する。近距離の前進要求45%は既存の最低出力補正で65%になる。
+`Phase6ForwardOutputSec/AlignOutputSec`はモータ指令が出ていた時間の累計で、実測の車輪回転時間ではない。
+`Phase6ForwardBoost/AlignBoost`は進捗不足による一段強化、`Phase6Reapproaches`はP5復帰回数。
+`Phase6ProgressMetric/ProgressDelta/ProgressOutputSec`は直近の進捗評価値・改善量・評価区間の出力時間。
+前進の評価値はcm、旋回は正規化画像中心誤差（0〜0.5）。正の改善量が接近／中央への改善を示す。
+
+`closer_distance_band`、`turn_angle_limit`、`output_time_limit`は動作中の停止理由。
+`GOAL_OUTPUT_TIME_LIMIT`と`GOAL_REAPPROACH_LIMIT`は成功ではない終端理由。
+要求済みパルスの残り時間は再起動チェックポイントで保守的に予約するため、
+再起動後の出力時間累計には、その実行が未確認の予約分を含むことがある。

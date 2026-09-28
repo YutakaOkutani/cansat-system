@@ -42,6 +42,23 @@ class MissionConfigTest(unittest.TestCase):
         self.assertEqual(config.radio.control, "off")
         self.assertTrue(config.radio.use_sudo)
 
+    def test_approach_defaults_and_overrides(self):
+        config = load_mission_config(self._write_config(VALID_CONFIG))
+        self.assertEqual(config.approach.far_forward_sec, .4)
+        config = load_mission_config(self._write_config(VALID_CONFIG +
+            '\n[approach]\nfar_forward_sec = 0.5\nfar_align_pwm = 70\n'))
+        self.assertEqual(config.approach.far_forward_sec, .5)
+        self.assertEqual(config.approach.far_align_pwm, 70)
+        self.assertEqual(config.approach.far_forward_boost_sec, .6)
+
+    def test_invalid_approach_values_are_rejected(self):
+        for setting in ('far_forward_sec = 0', 'far_forward_sec = true',
+                        'far_forward_sec = nan', 'far_forward_sec = 0.7',
+                        'far_align_pwm = 101', 'unknown = 1',
+                        'far_forward_sec = 0.5\nfar_forward_boost_sec = 0.4'):
+            with self.subTest(setting=setting), self.assertRaises(MissionConfigError):
+                load_mission_config(self._write_config(VALID_CONFIG+'\n[approach]\n'+setting+'\n'))
+
     def test_missing_file_is_rejected(self):
         with self.assertRaisesRegex(MissionConfigError, "Mission config not found"):
             load_mission_config("/does/not/exist/mission.toml")

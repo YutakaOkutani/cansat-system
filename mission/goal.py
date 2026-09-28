@@ -10,7 +10,7 @@ from mission.const import (
 )
 
 
-def goal_evidence(snapshot, now, monotonic_now, *, require_center=True, max_distance=GOAL_ENTRY_DISTANCE_CM):
+def goal_evidence(snapshot, now, monotonic_now, *, require_center=True, max_distance=GOAL_ENTRY_DISTANCE_CM, require_sync=True):
     try:
         distance = float(snapshot.get('sonar_distance_cm', float('nan')))
         age = monotonic_now - float(snapshot.get('sonar_observed_monotonic', 0))
@@ -37,7 +37,7 @@ def goal_evidence(snapshot, now, monotonic_now, *, require_center=True, max_dist
             return False, 'sonar_stale', distance
         if not math.isfinite(distance) or not SONAR_MIN_DISTANCE_CM <= distance <= max_distance:
             return False, 'sonar_out_of_range', distance
-        if not math.isfinite(sonar_time) or not math.isfinite(camera_time) or abs(camera_time - sonar_time) > GOAL_MAX_SAMPLE_SKEW_SEC:
+        if not math.isfinite(sonar_time) or not math.isfinite(camera_time) or (require_sync and abs(camera_time - sonar_time) > GOAL_MAX_SAMPLE_SKEW_SEC):
             return False, 'observations_not_aligned', distance
         return True, 'close_track_camera_sonar_matched' if continuation else 'camera_sonar_matched', distance
     except (TypeError, ValueError, OverflowError):
@@ -61,8 +61,8 @@ def final_entry_evidence(snapshot, now, mono):
     return matched, reason, distance
 
 
-def alignment_evidence(snapshot, now, mono):
-    matched, reason, distance = goal_evidence(snapshot, now, mono, require_center=False)
+def alignment_evidence(snapshot, now, mono, *, require_sync=True):
+    matched, reason, distance = goal_evidence(snapshot, now, mono, require_center=False, require_sync=require_sync)
     try:
         direction = float(snapshot.get('cone_direction', float('nan')))
     except (TypeError, ValueError, OverflowError):

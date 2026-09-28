@@ -11,7 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from mission.const import (
     GOAL_MAX_DISTANCE_SPREAD_CM,
-    GOAL_OBSERVATION_TIMEOUT_SEC,
+    GOAL_VISUAL_CLOSE_WAIT_SEC,
     CAMERA_FRAME_STALE_STOP_SEC,
     CONE_PHASE5_REACH_CONFIRM_FRAMES,
     CONE_LOST_COUNT_LIMIT,
@@ -162,7 +162,7 @@ class Phase5Handler(BasePhaseHandler):
         if camera_fresh and evidence["close_reached"] and not is_reach_effective:
             if getattr(controller, "phase5_goal_wait_since", None) is None:
                 controller.phase5_goal_wait_since = time.monotonic()
-            if time.monotonic() - controller.phase5_goal_wait_since >= GOAL_OBSERVATION_TIMEOUT_SEC:
+            if time.monotonic() - controller.phase5_goal_wait_since >= GOAL_VISUAL_CLOSE_WAIT_SEC:
                 controller.goal_decision = "bounded_range_recovery"
                 controller.phase6_motion_until = 0.0
                 controller.stop_motors()

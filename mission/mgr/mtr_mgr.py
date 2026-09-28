@@ -2,11 +2,12 @@ import math
 import threading
 import time
 
-from mission.goal import goal_evidence, final_entry_evidence, alignment_evidence
+from mission.goal import final_entry_evidence
+from mission.approach import motion_evidence
 from mission.diagnostics import elapsed
 
 from mission.const import (
-    GOAL_STOP_DISTANCE_CM, GOAL_CENTER_TOLERANCE,
+    GOAL_CENTER_TOLERANCE,
     PHASE6_APPROACH_SPEED,
     PHASE6_APPROACH_RAMP_TIME,
     APPROACH_TURN_GAIN,
@@ -1052,39 +1053,27 @@ class MotorManager:
     def _drive_phase6_approach(self, snapshot):
         now = time.monotonic()
         action = getattr(self, 'phase6_action', 'forward')
-        matched, evidence_reason, distance = (alignment_evidence(snapshot, time.time(), now)
-                                if action in ('left', 'right') else
-                                goal_evidence(snapshot, time.time(), now))
-        if action in ('left', 'right'):
-            direction = snapshot.get('cone_direction', 0.5)
-            matched = matched and (direction < 0.5 - GOAL_CENTER_TOLERANCE if action == 'left'
-                                   else direction > 0.5 + GOAL_CENTER_TOLERANCE)
-            if not matched and evidence_reason == 'camera_sonar_matched':
-                evidence_reason = 'alignment_direction_mismatch'
+        matched, evidence_reason, distance = motion_evidence(self, snapshot, time.time(), now)
         gate = ''
         if self._shutdown_active():
             gate = 'shutdown'
         elif bool(getattr(self, 'mission_total_timeout_triggered', False)):
             gate = 'mission_timeout'
-        elif now >= float(getattr(self, 'phase6_motion_until', 0.0)):
-            gate = 'pulse_deadline_or_not_authorized'
-        elif snapshot.get('angle_motion_monotonic', 0) > getattr(self, 'phase6_motion_started', now):
-            gate = 'heading_changed'
         elif not matched:
-            gate = 'evidence:' + evidence_reason
-        elif distance <= GOAL_STOP_DISTANCE_CM:
-            gate = 'stop_distance'
+            gate = evidence_reason
         self.phase6_motor_gate = gate or 'drive_authorized'
         if gate:
+            self.phase6_motion_until = 0.0
             self.stop_motors(reason='phase6:' + gate)
             return
+        speed = (getattr(self, 'phase6_motion', None) or {}).get('speed', PHASE6_APPROACH_SPEED)
         if action in ('left', 'right'):
-            self._set_forward_pivot_turn(action, PHASE6_APPROACH_SPEED,
+            self._set_forward_pivot_turn(action, speed,
                                          'phase6_align_' + action,
                                          ramp_time=PHASE6_APPROACH_RAMP_TIME)
             return
         self.set_motors(
-            PHASE6_APPROACH_SPEED, True, PHASE6_APPROACH_SPEED, True,
+            speed, True, speed, True,
             ramp_time=PHASE6_APPROACH_RAMP_TIME,
             cmd_type="phase6_range_approach",
         )
@@ -1094,6 +1083,16 @@ class MotorManager:
         lock = self.__dict__.setdefault('_motor_diagnostic_lock', threading.Lock())
         with lock:
             wall, mono = time.time(), time.monotonic()
+            # Publish one immutable ledger snapshot for readers in the phase
+            # handler and checkpoint thread. Count output, never request duration.
+            ledger = dict(getattr(self, 'phase6_output', {}))
+            active = ledger.get('active')
+            if active:
+                ledger[active] = ledger.get(active, 0.0) + max(0.0, mono-ledger['updated_at'])
+            ledger['active'] = ('forward' if cmd_type == 'phase6_range_approach' else
+                                'align' if cmd_type in ('phase6_align_left', 'phase6_align_right') else None)
+            ledger['updated_at'] = mono
+            self.phase6_output = ledger
             previous = getattr(self, 'last_motor_command', {}).get('type', '')
             was_pulse = previous.startswith('phase6_')
             is_pulse = cmd_type.startswith('phase6_')

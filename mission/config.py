@@ -1,6 +1,7 @@
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
+from mission.approach import ApproachConfig
 from pathlib import Path
 
 from mission.paths import RUN_CONTEXT_PATH
@@ -35,6 +36,7 @@ class MissionConfig:
     target: TargetConfig
     radio: RadioConfig
     source: Path
+    approach: ApproachConfig = field(default_factory=ApproachConfig)
 
 
 @dataclass(frozen=True)
@@ -52,7 +54,7 @@ class RunContextConfig:
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 MISSION_CONFIG_PATH = _REPO_ROOT / "mission.toml"
-_ROOT_KEYS = {"target", "radio"}
+_ROOT_KEYS = {"target", "radio", "approach"}
 _TARGET_KEYS = {"latitude", "longitude"}
 _RADIO_KEYS = {
     "control",
@@ -207,6 +209,31 @@ def load_mission_config(path=None):
     if restore_timeout_sec < 0.0:
         raise MissionConfigError(f"{config_path}: radio.restore_timeout_sec must be non-negative")
 
+    approach_table = data.get('approach', {})
+    if not isinstance(approach_table, dict):
+        raise MissionConfigError(f'{config_path}: approach must be a table')
+    defaults = ApproachConfig()
+    _reject_unknown_keys(approach_table, {f.name for f in fields(defaults)}, 'approach', config_path)
+    overrides = {}
+    for name in approach_table:
+        value = _require_number(approach_table, name, 'approach', config_path)
+        upper = (100 if name.endswith('_pwm') else 30 if name == 'max_turn_deg'
+                 else 120 if 'output_limit' in name else 10 if 'progress_output' in name else .6)
+        if not 0 < value <= upper:
+            raise MissionConfigError(f'{config_path}: approach.{name} must be > 0 and <= {upper}')
+        overrides[name] = value
+    approach = ApproachConfig(**overrides)
+    for base, boost in (('far_forward_sec', 'far_forward_boost_sec'),
+                        ('mid_forward_sec', 'mid_forward_boost_sec'),
+                        ('far_align_sec', 'far_align_boost_sec'),
+                        ('far_forward_pwm', 'far_forward_boost_pwm'),
+                        ('far_align_pwm', 'far_align_boost_pwm')):
+        if getattr(approach, boost) < getattr(approach, base):
+            raise MissionConfigError(f'{config_path}: approach.{boost} must be >= {base}')
+
+    if approach.near_align_boost_sec < .05 or approach.near_align_boost_pwm < 45:
+        raise MissionConfigError(f'{config_path}: near alignment boost must preserve the base pulse')
+
     return MissionConfig(
         target=TargetConfig(latitude=latitude, longitude=longitude),
         radio=RadioConfig(
@@ -217,4 +244,5 @@ def load_mission_config(path=None):
             dry_run=_require_bool(radio, "dry_run", "radio", config_path),
         ),
         source=config_path.resolve(),
+        approach=approach,
     )

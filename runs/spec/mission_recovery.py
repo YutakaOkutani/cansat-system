@@ -126,6 +126,41 @@ class MissionRecoveryTest(unittest.TestCase):
             with self.assertRaises(RecoveryError):
                 RecoveryStore(self.path).load(self.config)
 
+    def test_output_budget_and_boost_survive_restart_without_replaying_motion(self):
+        self.seed(6)
+        store, c = self.resume(6)
+        c.phase6_output = {'forward': 2.0, 'align': .4, 'active': 'forward', 'updated_at': 110}
+        c.phase6_motion_until = 110.6
+        c.phase6_action = 'forward'
+        c.phase6_forward_boost = True
+        with patch('time.time', return_value=110.2), patch('time.monotonic', return_value=110.2):
+            store.save(c, force=True)
+        # .2 s actual output + .4 s authorized remainder are charged on disk.
+        self.assertAlmostEqual(store.record['phase6_forward_output_sec'], 2.6)
+        self.assertAlmostEqual(store.record['phase6_align_output_sec'], .4)
+        _, restored = self.resume(6, now=112)
+        self.assertAlmostEqual(restored.phase6_output['forward'], 2.6)
+        self.assertIsNone(restored.phase6_output['active'])
+        self.assertTrue(restored.phase6_forward_boost)
+        execute(restored, 112)
+        self.assertEqual(restored.phase6_motion_until, 0)
+
+    def test_invalid_output_budget_is_rejected(self):
+        for field, value in (('phase6_forward_output_sec', -1),
+                             ('phase6_align_output_sec', float('nan')),
+                             ('phase6_forward_boost', 1)):
+            record = self.seed(6)
+            self.path.write_text(json.dumps(dict(record, **{field: value})))
+            with self.assertRaises(RecoveryError):
+                RecoveryStore(self.path).load(self.config)
+
+    def test_changed_motion_config_refuses_unsafe_resume(self):
+        from dataclasses import replace
+        self.seed(6)
+        changed = replace(self.config, approach=replace(self.config.approach, far_forward_pwm=72))
+        with self.assertRaisesRegex(RecoveryError, 'configuration changed'):
+            RecoveryStore(self.path).load(changed)
+
     def test_budgets_are_not_double_counted_on_second_restart(self):
         self.seed(6, visit=8)
         store, c = self.resume(6)

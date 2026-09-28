@@ -74,7 +74,7 @@ class TerminalExitTest(unittest.TestCase):
     def test_every_reason_exits_in_transition_iteration_without_sleep(self):
         for reason in ('GOAL_PROXIMITY_CONFIRMED', 'GOAL_APPROACH_TIMEOUT',
                        'GOAL_PROXIMITY_UNCONFIRMED', 'GOAL_CAMERA_TIMEOUT',
-                       'GOAL_MOTION_LIMIT', 'GOAL_NO_PROGRESS', 'MISSION_TOTAL_TIMEOUT',
+                       'GOAL_MOTION_LIMIT', 'GOAL_NO_PROGRESS', 'GOAL_OUTPUT_TIME_LIMIT', 'GOAL_REAPPROACH_LIMIT', 'MISSION_TOTAL_TIMEOUT',
                        'PHASE4_TIMEOUT_GIVE_UP', 'PHASE5_VISUAL_LOST_TIMEOUT',
                        'UNRECOGNIZED_FAILURE', 'RUNNING'):
             with self.subTest(reason=reason):

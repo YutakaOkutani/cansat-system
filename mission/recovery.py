@@ -14,6 +14,7 @@ import time
 
 from mission.const import Phase, RECOVERY_SAVE_INTERVAL_SEC, RECOVERY_CLOCK_TOLERANCE_SEC
 from mission.paths import DEFAULT_DATA_ROOT
+from mission.approach import output_seconds, settings, DEFAULT_APPROACH
 
 
 STATE_PATH = DEFAULT_DATA_ROOT / 'mission-state.json'
@@ -24,7 +25,9 @@ class RecoveryError(RuntimeError):
 
 
 def identity(config):
-    return {'target': asdict(config.target), 'radio': asdict(config.radio)}
+    return {'target': asdict(config.target), 'radio': asdict(config.radio),
+            'approach': asdict(getattr(config, 'approach', DEFAULT_APPROACH)),
+            'control_revision': 'field-20min-v1'}
 
 
 class RecoveryStore:
@@ -73,6 +76,13 @@ class RecoveryStore:
             for field in ('phase6_forward_pulses', 'phase6_align_pulses', 'phase6_reapproaches'):
                 if field in record and (type(record[field]) is not int or record[field] < 0):
                     raise ValueError('invalid P6 recovery budget')
+            for name in ('phase6_forward_output_sec', 'phase6_align_output_sec'):
+                value = record.get(name, 0)
+                if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                    raise ValueError('invalid output duration')
+            for name in ('phase6_forward_boost', 'phase6_align_boost'):
+                if name in record and type(record[name]) is not bool:
+                    raise ValueError('invalid motion boost')
             if config is not None and record['config'] != identity(config):
                 raise ValueError('mission configuration changed; explicitly reset before a new mission')
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -135,6 +145,14 @@ class RecoveryStore:
             # Old checkpoints lack action counts: conservatively charge both.
             setattr(c, field, record.get(field, record['phase6_pulses']))
         c.phase6_reapproaches = record.get('phase6_reapproaches', 0)
+        cfg = settings(c)
+        c.phase6_output = {
+            'forward': record.get('phase6_forward_output_sec', c.phase6_forward_pulses * cfg.far_forward_boost_sec),
+            'align': record.get('phase6_align_output_sec', c.phase6_align_pulses * cfg.far_align_boost_sec),
+            'active': None,
+        }
+        c.phase6_forward_boost = record.get('phase6_forward_boost', False)
+        c.phase6_align_boost = record.get('phase6_align_boost', False)
         phase = Phase(record['phase'])
         # initialize_phase already established a new visit marker. Do not double
         # count saved phase time by backdating that marker as well.
@@ -174,6 +192,15 @@ class RecoveryStore:
         if phase != previous_phase:
             c._recovery_visit_elapsed = 0
         visit = max(0, wall - c.phase_entry_time) + getattr(c, '_recovery_visit_elapsed', 0)
+        forward_output = output_seconds(c, 'forward', mono)
+        align_output = output_seconds(c, 'right', mono)
+        # Reserve the rest of an authorized pulse on disk: a power loss between
+        # checkpoints cannot give that output budget back. Live counters remain actual.
+        remaining = max(0.0, getattr(c, 'phase6_motion_until', 0)-mono)
+        if getattr(c, 'phase6_action', '') == 'forward':
+            forward_output += remaining
+        else:
+            align_output += remaining
         record = dict(schema=1, phase=phase, config=self.config, mission_id=self.mission_id,
                       run_id=c.run_id, resume_count=self.resume_count, saved_at=wall,
                       mission_elapsed=max(0, wall - c.mission_start_time),
@@ -183,7 +210,11 @@ class RecoveryStore:
                       phase6_pulses=pulses, reason=c.mission_end_reason,
                       phase6_forward_pulses=getattr(c, 'phase6_forward_pulses', 0),
                       phase6_align_pulses=getattr(c, 'phase6_align_pulses', 0),
-                      phase6_reapproaches=getattr(c, 'phase6_reapproaches', 0))
+                      phase6_reapproaches=getattr(c, 'phase6_reapproaches', 0),
+                      phase6_forward_output_sec=forward_output,
+                      phase6_align_output_sec=align_output,
+                      phase6_forward_boost=getattr(c, 'phase6_forward_boost', False),
+                      phase6_align_boost=getattr(c, 'phase6_align_boost', False))
         self._write(record)
         self._last_key, self._last_save = key, mono
 

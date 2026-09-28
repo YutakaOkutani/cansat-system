@@ -25,6 +25,10 @@ FINAL_DIAGNOSTIC_DEFAULTS = {
     'HardwareCloseDevice': '', 'HardwareCloseCompleted': 0,
     'RecoveryMissionId': '', 'RecoveryCount': 0,
     'RecoveryFromRunId': '', 'RecoveryFromPhase': '',
+    'Phase6RequestedDurationSec': '', 'Phase6RequestedPWM': '',
+    'Phase6DistanceBand': '', 'Phase6ForwardOutputSec': '', 'Phase6AlignOutputSec': '',
+    'Phase6ForwardBoost': 0, 'Phase6AlignBoost': 0, 'Phase6Reapproaches': 0,
+    'Phase6ProgressMetric': '', 'Phase6ProgressDelta': '', 'Phase6ProgressOutputSec': '',
 }
 
 

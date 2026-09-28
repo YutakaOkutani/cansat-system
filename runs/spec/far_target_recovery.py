@@ -89,7 +89,11 @@ class FarTargetRecoveryTest(unittest.TestCase):
                         elif case == 'skew':
                             c.st.update_sonar(sonar_observed_at=t-.4)
                         execute(c, t)
-                self.assertEqual(c.st.snapshot()['phase'], 7)
+                self.assertEqual(c.st.snapshot()['phase'], 6)
+                self.assertEqual(c.mission_end_reason, 'RUNNING')
+                c.observe(120.1, distance=86, reached=False)
+                c.st.update_sonar(sonar_valid=False)
+                execute(c, 120.1)
                 self.assertEqual(c.mission_end_reason, 'GOAL_PROXIMITY_UNCONFIRMED')
                 self.assertEqual(c.phase6_motion_until, 0)
 

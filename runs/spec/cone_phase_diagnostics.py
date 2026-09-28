@@ -129,8 +129,8 @@ class ConePhaseDiagnosticsTest(unittest.TestCase):
     def test_phase4_timeout_stops_and_skips_directly_to_phase7(self):
         ctrl = _VisionController(Phase.PHASE4)
 
-        ctrl.update_cone_frame(probability=0.0, observation_time=160.0)
-        with patch("mission.phases.p4.time.time", return_value=160.0):
+        ctrl.update_cone_frame(probability=0.0, observation_time=220.0)
+        with patch("mission.phases.p4.time.time", return_value=220.0):
             Phase4Handler().execute(ctrl, ctrl.st.snapshot())
 
         self.assertEqual(ctrl.st.snapshot()["phase"], int(Phase.PHASE7))

@@ -104,9 +104,9 @@ class Phase6FlowTest(unittest.TestCase):
         ctrl.observe(100.8, distance=30)
         execute(ctrl, 100.8)
         self.assertGreater(ctrl.phase6_motion_until, 100.8)
-        self.assertLess(ctrl.phase6_motion_until, 101)
-        ctrl.observe(101, distance=28)
-        execute(ctrl, 101)
+        self.assertAlmostEqual(ctrl.phase6_motion_until, 101.2)
+        ctrl.observe(101.3, distance=28)
+        execute(ctrl, 101.3)
         self.assertEqual(ctrl.phase6_motion_until, 0)
         self.assertEqual(ctrl.mission_end_reason, 'RUNNING')
 
@@ -144,7 +144,7 @@ class Phase6FlowTest(unittest.TestCase):
                 execute(ctrl, 104)
                 self.assertEqual(ctrl.mission_end_reason, 'RUNNING')
                 self.assertEqual(ctrl.st.snapshot()['phase'], int(Phase.PHASE6))
-                execute(ctrl, 107)
+                execute(ctrl, 121)
                 self.assertEqual(ctrl.mission_end_reason, 'GOAL_CAMERA_TIMEOUT')
                 self.assertEqual(ctrl.st.snapshot()['phase'], int(Phase.PHASE7))
 
