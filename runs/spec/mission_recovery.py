@@ -99,6 +99,33 @@ class MissionRecoveryTest(unittest.TestCase):
         self.assertEqual(c.mission_end_reason, 'GOAL_APPROACH_TIMEOUT')
         c.stop_motors.assert_called()
 
+    def test_p5_checkpoint_retains_p6_budgets_after_reapproach(self):
+        record = self.seed(5, visit=3, pulses=10)
+        record['phase_elapsed']['6'] = 18
+        record.update(phase6_forward_pulses=7, phase6_align_pulses=3, phase6_reapproaches=1)
+        RecoveryStore(self.path)._write(record)
+        store, c = self.resume(5)
+        with patch('time.time', return_value=111):
+            store.save(c, force=True)
+        self.assertEqual(store.record['phase6_forward_pulses'], 7)
+        self.assertEqual(store.record['phase6_align_pulses'], 3)
+        self.assertEqual(store.record['phase6_reapproaches'], 1)
+        c.st.update_navigation(phase=6)
+        with patch('time.time', return_value=112):
+            c._sync_phase_time_tracking(Phase.PHASE6)
+        execute(c, 112)
+        self.assertEqual(c.phase6_pulses, 10)
+        self.assertEqual(c.phase6_start_time, 94)
+        self.assertEqual(c.phase6_reapproaches, 1)
+
+    def test_corrupt_action_or_retry_budget_refuses_resume(self):
+        for field in ('phase6_forward_pulses', 'phase6_align_pulses', 'phase6_reapproaches'):
+            record = self.seed(5)
+            record[field] = -1
+            RecoveryStore(self.path)._write(record)
+            with self.assertRaises(RecoveryError):
+                RecoveryStore(self.path).load(self.config)
+
     def test_budgets_are_not_double_counted_on_second_restart(self):
         self.seed(6, visit=8)
         store, c = self.resume(6)

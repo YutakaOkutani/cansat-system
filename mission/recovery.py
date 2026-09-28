@@ -70,6 +70,9 @@ class RecoveryStore:
                 raise ValueError('invalid Phase2 stage')
             if type(record['phase6_pulses']) is not int or record['phase6_pulses'] < 0:
                 raise ValueError('invalid pulse count')
+            for field in ('phase6_forward_pulses', 'phase6_align_pulses', 'phase6_reapproaches'):
+                if field in record and (type(record[field]) is not int or record[field] < 0):
+                    raise ValueError('invalid P6 recovery budget')
             if config is not None and record['config'] != identity(config):
                 raise ValueError('mission configuration changed; explicitly reset before a new mission')
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -126,6 +129,12 @@ class RecoveryStore:
             raise RecoveryError('Clock moved backwards; mission deadline cannot be restored')
         c.mission_start_time = now - record['mission_elapsed'] - max(0, now - record['saved_at'])
         c.phase_elapsed_totals = {Phase(int(k)): v for k, v in record['phase_elapsed'].items()}
+        # Preserve budgets even when the checkpoint was taken after P6 -> P5.
+        c.phase6_pulses = record['phase6_pulses']
+        for field in ('phase6_forward_pulses', 'phase6_align_pulses'):
+            # Old checkpoints lack action counts: conservatively charge both.
+            setattr(c, field, record.get(field, record['phase6_pulses']))
+        c.phase6_reapproaches = record.get('phase6_reapproaches', 0)
         phase = Phase(record['phase'])
         # initialize_phase already established a new visit marker. Do not double
         # count saved phase time by backdating that marker as well.
@@ -171,7 +180,10 @@ class RecoveryStore:
                       phase_elapsed={str(int(p)): c._current_phase_elapsed(p, wall) for p in Phase},
                       visit_elapsed=visit, phase2_stage=stage,
                       stage_elapsed=max(0, wall - (getattr(c, 'phase2_stage_start', None) or wall)),
-                      phase6_pulses=pulses, reason=c.mission_end_reason)
+                      phase6_pulses=pulses, reason=c.mission_end_reason,
+                      phase6_forward_pulses=getattr(c, 'phase6_forward_pulses', 0),
+                      phase6_align_pulses=getattr(c, 'phase6_align_pulses', 0),
+                      phase6_reapproaches=getattr(c, 'phase6_reapproaches', 0))
         self._write(record)
         self._last_key, self._last_save = key, mono
 

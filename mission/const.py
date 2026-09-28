@@ -40,7 +40,7 @@ DATA_SAMPLING_RATE = 0.20
 GRASS_MIN_MOTOR_SPEED = 45
 # Distance-controlled final approach; field calibration required.
 PHASE6_APPROACH_SPEED = 45
-PHASE6_APPROACH_TIMEOUT_SEC = 20.0
+PHASE6_APPROACH_TIMEOUT_SEC = 45.0
 PHASE6_APPROACH_RAMP_TIME = 0.0  # Nonblocking: motor loop enforces short pulse deadlines.
 
 # ミッション全体のフェーズ累積予算
@@ -329,7 +329,7 @@ MANUAL_TURN_SPEED_RATIO = 3.0 / 5.0
 MOTOR_DRIVE_MIN_SPEED = 65.0
 # モーター個体差補正 (PWM指令値に乗算)
 MOTOR_SPEED_SCALE_1 = 1.00
-MOTOR_SPEED_SCALE_2 = 0.90  # 速い右輪を10%減速する初期調整値。実走で再調整する。
+MOTOR_SPEED_SCALE_2 = 1.00
 # モーター個体差補正 (PWM指令値に加算, scale適用後)
 # 追加調整はまず各輪のMOTOR_SPEED_SCALEで行う。
 MOTOR_SPEED_OFFSET_1 = 0.0
@@ -380,7 +380,17 @@ GOAL_RESUME_DISTANCE_CM = 3.5
 GOAL_FAR_CONFIRM_SAMPLES = 2
 GOAL_NEAR_PULSE_SEC = 0.05
 GOAL_NEAR_PULSE_DISTANCE_CM = 8.0
-GOAL_MAX_PULSES = 12
+# Preserve the short-pulse behavior; allow slow translation without spending
+# its budget on alignment. All limits apply across P6 re-entry.
+GOAL_MAX_FORWARD_PULSES = 40
+GOAL_MAX_ALIGN_PULSES = 12
+GOAL_MAX_PULSES = GOAL_MAX_FORWARD_PULSES + GOAL_MAX_ALIGN_PULSES
+# Provisional small-target guard, not a calibrated visual distance estimate.
+GOAL_SMALL_TARGET_OCCUPANCY = 0.015
+GOAL_SMALL_TARGET_ENTRY_CM = 30.0
+GOAL_RECOVERY_DISTANCE_CM = 75.0  # Hysteresis above the 60 cm entry range.
+GOAL_RECOVERY_SAMPLES = 3
+GOAL_MAX_REAPPROACHES = 2
 GOAL_PROGRESS_MIN_CM = 0.5
 GOAL_PROGRESS_PULSES = 4
 GOAL_SETTLE_HEADING_DEG = 5.0

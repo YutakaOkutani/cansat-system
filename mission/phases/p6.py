@@ -16,9 +16,12 @@ from mission.const import (
     GOAL_FAR_CONFIRM_SAMPLES, GOAL_NEAR_PULSE_SEC, GOAL_NEAR_PULSE_DISTANCE_CM,
     GOAL_MAX_PULSES, GOAL_PROGRESS_MIN_CM, GOAL_PROGRESS_PULSES, GOAL_MAX_DISTANCE_SPREAD_CM,
     GOAL_SETTLE_HEADING_DEG, GOAL_ALIGN_PULSE_SEC, CAMERA_FRAME_STALE_STOP_SEC,
+    GOAL_MAX_FORWARD_PULSES, GOAL_MAX_ALIGN_PULSES, GOAL_RECOVERY_DISTANCE_CM,
+    GOAL_RECOVERY_SAMPLES, GOAL_MAX_REAPPROACHES, SONAR_MAX_DISTANCE,
 )
 from mission.goal import goal_evidence, alignment_evidence
-from mission.close_track import fresh_heading, heading_delta, number
+from mission.close_track import fresh_heading, heading_delta, number, cropped_region
+from mission.cone_candidate import evaluate_cone_candidate
 from mission.phases.base import BasePhaseHandler
 
 
@@ -40,6 +43,7 @@ class Phase6Handler(BasePhaseHandler):
         c.phase6_stage = 'settle'
         c.phase6_observe_after = now + GOAL_SETTLE_SEC
         c.phase6_votes = []
+        c.phase6_recovery_samples = []
         c.phase6_far_count = 0
         c.goal_confirm_count = 0
         c.phase6_align_side = None
@@ -48,11 +52,13 @@ class Phase6Handler(BasePhaseHandler):
         c.phase6_settle_started = now
 
     def _pulse(self, c, now, distance, action):
-        if c.phase6_pulses >= GOAL_MAX_PULSES:
+        counter = 'phase6_forward_pulses' if action == 'forward' else 'phase6_align_pulses'
+        limit = GOAL_MAX_FORWARD_PULSES if action == 'forward' else GOAL_MAX_ALIGN_PULSES
+        if c.phase6_pulses >= GOAL_MAX_PULSES or getattr(c, counter, 0) >= limit:
             self._finish(c, 'GOAL_MOTION_LIMIT')
             return
         # Translation must make measurable progress over a bounded group of
-        # pulses. Alignment has a separate action but shares the total budget.
+        # pulses. Alignment has its own limit as well as the shared total budget.
         if action == 'forward':
             c.phase6_progress.append(distance)
             if len(c.phase6_progress) > GOAL_PROGRESS_PULSES:
@@ -62,6 +68,7 @@ class Phase6Handler(BasePhaseHandler):
                 c.phase6_progress = [distance]
         self._settle(c, now)
         c.phase6_pulses += 1
+        setattr(c, counter, getattr(c, counter, 0) + 1)
         c.phase6_action = action
         c.phase6_stage = 'move'
         c.phase6_gate = 'pulse_requested'
@@ -70,6 +77,49 @@ class Phase6Handler(BasePhaseHandler):
         c.phase6_motion_started = now
         c.phase6_motion_until = now + duration
         c.goal_decision = 'range_approach_pulse' if action == 'forward' else 'bounded_align_' + action
+
+    def _reapproach(self, c, snapshot, now, wall):
+        """Only stopped, fresh, repeatedly far observations can release to P5."""
+        evidence = evaluate_cone_candidate(snapshot)
+        matched, _, distance = goal_evidence(
+            snapshot, wall, now, require_center=False,
+            max_distance=SONAR_MAX_DISTANCE * 100.0 - 0.001)
+        eligible = (
+            matched and distance >= GOAL_RECOVERY_DISTANCE_CM
+            and not evidence['close_reached'] and not cropped_region(snapshot)
+            and not snapshot.get('cone_close_track', {}).get('hold')
+            and now >= c.phase6_observe_after
+            and number(snapshot, 'sonar_observed_monotonic', 0) >= c.phase6_observe_after
+            and now - (wall - number(snapshot, 'cone_updated_at', 0)) >= c.phase6_observe_after
+        )
+        if not eligible:
+            c.phase6_recovery_samples = []
+            return False
+        pair = (int(snapshot['cone_sequence']), int(snapshot['sonar_sequence']))
+        c.phase6_recovery_samples = [s for s in c.phase6_recovery_samples
+                                     if now - s[0] <= GOAL_VOTE_WINDOW_SEC]
+        previous = c.phase6_recovery_last_pair
+        if pair[0] > previous[0] and pair[1] > previous[1]:
+            c.phase6_recovery_last_pair = pair
+            samples = c.phase6_recovery_samples
+            if samples and max(abs(distance - s[1]) for s in samples) > GOAL_MAX_DISTANCE_SPREAD_CM:
+                samples.clear()
+            samples.append((now, distance))
+            c.phase6_recovery_samples = samples[-GOAL_RECOVERY_SAMPLES:]
+        if (len(c.phase6_recovery_samples) < GOAL_RECOVERY_SAMPLES
+                or now - c.phase6_wait_since < GOAL_OBSERVATION_TIMEOUT_SEC):
+            return False
+        if getattr(c, 'phase6_reapproaches', 0) >= GOAL_MAX_REAPPROACHES:
+            self._finish(c, 'GOAL_REAPPROACH_LIMIT')
+            return True
+        self._settle(c, now)
+        c.phase6_reapproaches = getattr(c, 'phase6_reapproaches', 0) + 1
+        c.phase6_elapsed_used = now - c.phase6_start_time
+        c.phase6_gate = 'reapproach_p5'
+        c.goal_decision = 'far_range_reapproach'
+        c.phase5_entry_reason = 'phase6_far_range_recovery'
+        c.st.update_navigation(phase=int(Phase.PHASE5))
+        return True
 
     def execute(self, controller, snapshot):
         controller.phase6_gate = 'evaluating'
@@ -114,14 +164,19 @@ class Phase6Handler(BasePhaseHandler):
         if not hasattr(c, 'phase6_stage') or getattr(c, 'phase6_entry_marker', None) != marker:
             self._settle(c, now)
             c.phase6_entry_marker = marker
-            c.phase6_start_time = now - getattr(c, 'phase6_resume_elapsed', 0.0)
+            elapsed_used = max(getattr(c, 'phase6_elapsed_used', 0.0),
+                               getattr(c, 'phase6_resume_elapsed', 0.0),
+                               getattr(c, 'phase_elapsed_totals', {}).get(Phase.PHASE6, 0.0))
+            c.phase6_start_time = now - elapsed_used
             c.phase6_resume_elapsed = 0.0
             c.phase6_last_pair = (0, 0)
             c.phase6_wait_since = now
-            c.phase6_pulses = getattr(c, 'phase6_resume_pulses', 0)
+            c.phase6_pulses = max(getattr(c, 'phase6_pulses', 0), getattr(c, 'phase6_resume_pulses', 0))
             c.phase6_resume_pulses = 0
             c.phase6_progress = []
             c.phase6_camera_recovery_requested = False
+            c.phase6_recovery_samples = []
+            c.phase6_recovery_last_pair = (0, 0)
         for key in (DEVICE_LED_RED, DEVICE_LED_GREEN):
             if c.devices.get(key):
                 c.devices[key].on()
@@ -181,11 +236,14 @@ class Phase6Handler(BasePhaseHandler):
             c.phase6_align_count = 0
             if was_moving:
                 self._settle(c, now)
+            if self._reapproach(c, snapshot, now, wall):
+                return
             # Missing/ambiguous observations are never votes. Previously good
             # stopped votes survive only their short window, not a movement.
             if now - c.phase6_wait_since >= GOAL_OBSERVATION_TIMEOUT_SEC:
                 self._finish(c, 'GOAL_PROXIMITY_UNCONFIRMED')
             return
+        c.phase6_recovery_samples = []
         if c.phase6_stage == 'move':
             if (now < c.phase6_motion_until and distance > GOAL_STOP_DISTANCE_CM
                     and action == c.phase6_action):

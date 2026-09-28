@@ -6,10 +6,11 @@ from mission.const import (
     GOAL_EARLY_ENTRY_DISTANCE_CM, GOAL_ALIGN_MIN_DISTANCE_CM, GOAL_ENTRY_DISTANCE_CM,
     GOAL_MAX_SAMPLE_SKEW_SEC, GOAL_MIN_OCCUPANCY,
     GOAL_CENTER_TOLERANCE, SONAR_MIN_DISTANCE_CM, SONAR_STALE_TIMEOUT_SEC,
+    GOAL_SMALL_TARGET_OCCUPANCY, GOAL_SMALL_TARGET_ENTRY_CM,
 )
 
 
-def goal_evidence(snapshot, now, monotonic_now, *, require_center=True):
+def goal_evidence(snapshot, now, monotonic_now, *, require_center=True, max_distance=GOAL_ENTRY_DISTANCE_CM):
     try:
         distance = float(snapshot.get('sonar_distance_cm', float('nan')))
         age = monotonic_now - float(snapshot.get('sonar_observed_monotonic', 0))
@@ -34,7 +35,7 @@ def goal_evidence(snapshot, now, monotonic_now, *, require_center=True):
             return False, 'sonar_invalid', distance
         if not 0 <= age < SONAR_STALE_TIMEOUT_SEC:
             return False, 'sonar_stale', distance
-        if not math.isfinite(distance) or not SONAR_MIN_DISTANCE_CM <= distance <= GOAL_ENTRY_DISTANCE_CM:
+        if not math.isfinite(distance) or not SONAR_MIN_DISTANCE_CM <= distance <= max_distance:
             return False, 'sonar_out_of_range', distance
         if not math.isfinite(sonar_time) or not math.isfinite(camera_time) or abs(camera_time - sonar_time) > GOAL_MAX_SAMPLE_SKEW_SEC:
             return False, 'observations_not_aligned', distance
@@ -50,6 +51,13 @@ def final_entry_evidence(snapshot, now, mono):
         matched, reason, distance = alignment_evidence(snapshot, now, mono)
         if distance > GOAL_EARLY_ENTRY_DISTANCE_CM:
             return False, 'cone_off_axis', distance
+    if matched:
+        evidence = evaluate_cone_candidate(snapshot)
+        if (not evidence['close_reached']
+                and not snapshot.get('cone_close_track', {}).get('hold')
+                and evidence['occupancy'] < GOAL_SMALL_TARGET_OCCUPANCY
+                and distance > GOAL_SMALL_TARGET_ENTRY_CM):
+            return False, 'small_target_range_unconfirmed', distance
     return matched, reason, distance
 
 
